@@ -31,6 +31,10 @@ pub struct Cpu {
     pub msr: u64,
     /// Time base: advances by one per executed instruction.
     pub tb: u64,
+    /// HRMOR written by mtspr 0x139; takes effect at the next context-synchronizing instruction (isync, rfid),
+    /// or else after the instruction that follows the write (CB_B changes it right before a `blr`).
+    pending_hrmor: Option<u64>,
+    hrmor_armed: bool,
     /// SPRs without dedicated state; reads of never-written ones give 0.
     pub spr: HashMap<u16, u64>,
 }
@@ -46,7 +50,7 @@ fn sext16(v: u32) -> u64 {
 
 impl Cpu {
     pub fn new(entry: u64) -> Cpu {
-        Cpu { gpr: [0; 32], pc: entry, lr: 0, ctr: 0, cr: 0, xer: 0, msr: 0, tb: 0, spr: HashMap::new() }
+        Cpu { gpr: [0; 32], pc: entry, lr: 0, ctr: 0, cr: 0, xer: 0, msr: 0, tb: 0, pending_hrmor: None, hrmor_armed: false, spr: HashMap::new() }
     }
 
     pub fn run(&mut self, bus: &mut Bus, max_steps: u64) -> Stop {
@@ -56,6 +60,23 @@ impl Cpu {
             }
         }
         Stop::StepLimit
+    }
+
+    fn sync_context(&mut self, bus: &mut Bus) {
+        if let Some(h) = self.pending_hrmor.take() {
+            bus.hrmor = h;
+        }
+    }
+
+    /// Run after every instruction: a pending HRMOR is applied once the instruction after the mtspr has executed.
+    fn age_hrmor(&mut self, bus: &mut Bus) {
+        if self.pending_hrmor.is_some() {
+            if self.hrmor_armed {
+                self.sync_context(bus);
+            } else {
+                self.hrmor_armed = true;
+            }
+        }
     }
 
     fn set_cr_field(&mut self, n: u32, bits: u32) {
@@ -175,11 +196,13 @@ impl Cpu {
                         // rfid
                         next = self.spr.get(&0x1A).copied().unwrap_or(0) & !3;
                         self.msr = self.spr.get(&0x1B).copied().unwrap_or(0);
+                        self.sync_context(bus);
                         self.pc = next;
                         return Ok(());
                     }
                     150 => {
                         // isync
+                        self.sync_context(bus);
                         self.pc = next;
                         return Ok(());
                     }
@@ -299,6 +322,7 @@ impl Cpu {
         }
         self.pc = next;
         self.tb += 1;
+        self.age_hrmor(bus);
         Ok(())
     }
 
@@ -436,6 +460,10 @@ impl Cpu {
                     self.gpr[rt] = *reg;
                 } else {
                     *reg = s;
+                    if spr == 0x139 {
+                        self.pending_hrmor = Some(s);
+                        self.hrmor_armed = false;
+                    }
                 }
             }
             _ => return Err(bad),
@@ -843,5 +871,40 @@ mod tests {
         });
         assert_eq!(c.pc, 0x4000);
         assert_eq!(c.msr, MSR_HV | 0x30);
+    }
+
+    #[test]
+    fn hrmor_takes_effect_at_the_next_context_synchronization() {
+        // mtspr 0x139,r3 ; isync
+        let (mut c, mut b) = setup(&[x(31, 3, 0x139 & 31, 0x139 >> 5, 467, 0), xl(150, 0, 0, 0)]);
+        c.gpr[3] = 0x017A_0300_0000;
+        steps(&mut c, &mut b, 1);
+        assert_eq!(b.hrmor, 0);
+        assert_eq!(c.spr[&0x139], 0x017A_0300_0000);
+        steps(&mut c, &mut b, 1);
+        assert_eq!(b.hrmor, 0x017A_0300_0000);
+    }
+
+    #[test]
+    fn hrmor_takes_effect_at_rfid_after_fetching_it_with_the_old_value() {
+        // mtspr 0x139,r3 ; rfid -- the rfid is fetched under the old HRMOR
+        let (mut c, mut b) = setup(&[x(31, 3, 0x139 & 31, 0x139 >> 5, 467, 0), xl(18, 0, 0, 0)]);
+        c.gpr[3] = 0x4000;
+        c.spr.insert(0x1A, 0x20);
+        steps(&mut c, &mut b, 2);
+        assert_eq!(b.hrmor, 0x4000);
+        assert_eq!(c.pc, 0x20);
+    }
+
+    #[test]
+    fn hrmor_takes_effect_for_the_fetch_after_a_blr_that_follows_the_mtspr() {
+        // mtspr 0x139,r3 ; blr  -- the target is fetched with the new HRMOR
+        let (mut c, mut b) = setup(&[x(31, 3, 0x139 & 31, 0x139 >> 5, 467, 0), 19 << 26 | 20 << 21 | 16 << 1]);
+        c.gpr[3] = 0x10000;
+        c.lr = 0x40;
+        steps(&mut c, &mut b, 1);
+        assert_eq!(b.hrmor, 0);
+        steps(&mut c, &mut b, 1);
+        assert_eq!((c.pc, b.hrmor), (0x40, 0x10000));
     }
 }

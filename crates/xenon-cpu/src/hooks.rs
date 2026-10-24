@@ -6,6 +6,10 @@ use std::collections::HashMap;
 pub enum Action {
     SetGpr { reg: usize, val: u64 },
     Log(&'static str),
+    /// Prints the listed GPRs to stderr (debug tracing, `runcb --log-pc`).
+    LogRegs(Vec<usize>),
+    /// HLE: continue at `pc` instead (skips code that only talks to hardware we do not model).
+    Jump(u64),
 }
 
 /// A `SetGpr` that changed the register: `old` is what the emulated code actually computed.
@@ -47,6 +51,13 @@ impl Hooks {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jump_is_an_action() {
+        let mut h = Hooks::new();
+        h.add(0x100, Action::Jump(0x200));
+        assert_eq!(h.at(0x100), &[Action::Jump(0x200)]);
+    }
 
     #[test]
     fn at_returns_actions_for_pc_only() {

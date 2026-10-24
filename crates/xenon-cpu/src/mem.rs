@@ -24,6 +24,8 @@ pub struct Bus {
     regions: Vec<Region>,
     /// (base, size, target): addresses in `base..base+size` are redirected to `target + (addr - base)`.
     aliases: Vec<(u64, u64, u64)>,
+    /// Hypervisor real-mode offset (SPR 0x139): addresses with bit 63 clear are ORed with it.
+    pub hrmor: u64,
 }
 
 impl Bus {
@@ -49,11 +51,18 @@ impl Bus {
         self.aliases.push((base, size, target));
     }
 
+    fn alias_of(&self, addr: u64) -> Option<u64> {
+        self.aliases.iter().find(|(b, s, _)| addr >= *b && addr - *b < *s).map(|(b, _, t)| t + (addr - b))
+    }
+
+    /// Aliases are tried on the address as issued (the locked-cache windows are mapped by SPR, ahead of
+    /// HRMOR), then HRMOR is applied to bit-63-clear addresses and the aliases are tried again.
     fn xlate(&self, addr: u64) -> u64 {
-        match self.aliases.iter().find(|(b, s, _)| addr >= *b && addr - *b < *s) {
-            Some((b, _, t)) => t + (addr - b),
-            None => addr,
+        if let Some(t) = self.alias_of(addr) {
+            return t;
         }
+        let addr = if addr >> 63 == 0 { addr | self.hrmor } else { addr };
+        self.alias_of(addr).unwrap_or(addr)
     }
 
     fn find(&mut self, addr: u64, size: usize, write: bool) -> Result<&mut Region, BusError> {
@@ -163,5 +172,17 @@ mod tests {
         b.write(0x8000_0200_0000_0010, 4, 0xDEADBEEF).unwrap();
         assert_eq!(b.read(0x0200_0010, 4).unwrap(), 0xDEADBEEF);
         assert!(b.read(0x0200_0100, 4).is_err());
+    }
+
+    #[test]
+    fn hrmor_offsets_only_addresses_without_bit_63() {
+        let mut b = Bus::new();
+        b.map_ram(0x8000_017A_0300_0000, 0x100);
+        b.write(0x8000_017A_0300_0010, 4, 0xCAFE).unwrap();
+        b.hrmor = 0x017A_0300_0000;
+        assert!(b.read(0x10, 4).is_err()); // 0x017A_0300_0010 is not mapped until the alias exists
+        b.map_alias(0x017A_0300_0000, 0x100, 0x8000_017A_0300_0000);
+        assert_eq!(b.read(0x10, 4).unwrap(), 0xCAFE);
+        assert_eq!(b.read(0x8000_017A_0300_0010, 4).unwrap(), 0xCAFE);
     }
 }

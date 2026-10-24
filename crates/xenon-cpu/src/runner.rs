@@ -29,6 +29,11 @@ pub fn run_until(cpu: &mut Cpu, bus: &mut Bus, hooks: &Hooks, handoff_pc: u64, m
                     cpu.gpr[*reg] = *val;
                 }
                 Action::Log(m) => eprintln!("hook {:#x}: {m}", cpu.pc),
+                Action::Jump(to) => cpu.pc = *to,
+                Action::LogRegs(rs) => {
+                    let v: Vec<String> = rs.iter().map(|r| format!("r{r}={:#x}", cpu.gpr[*r])).collect();
+                    eprintln!("pc {:#x}: {}", cpu.pc, v.join(" "));
+                }
             }
         }
         if let Err(s) = cpu.step(bus) {
@@ -72,6 +77,16 @@ mod tests {
         run_until(&mut cpu, &mut bus, &h, 0x1008, 100);
         assert_eq!(cpu.gpr[3], 0);
         assert_eq!(h.overrides(), vec![Override { pc: 0x1000, reg: 3, old: 5 }]);
+    }
+
+    #[test]
+    fn jump_hook_redirects_the_fetch() {
+        let mut bus = bus_with(&[ADDI_R3_1, B_SELF, ADDI_R3_1]);
+        let mut cpu = Cpu::new(0x1000);
+        let mut h = Hooks::new();
+        h.add(0x1004, Action::Jump(0x1008));
+        let (end, n) = run_until(&mut cpu, &mut bus, &h, 0x100C, 100);
+        assert_eq!((end, n), (StageEnd::Handoff { pc: 0x100C }, 2));
     }
 
     #[test]

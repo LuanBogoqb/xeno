@@ -217,3 +217,29 @@ O rastreador de constantes é linear e cego a fluxo; endereços de dado do bloco
 SPRs tocados em `0x49C..0x6D8`: `0x3F9`, `0x13E`, `0x3F4`, `0x3F1` (leitura-modificação-escrita com `sync/isync`, estilo HID/config de CPU), `0x3B3/0x3B4/0x3B5`, `0x139`, `0x1A/0x1B` (SRR0/SRR1: monta o retorno e **`rfid` em `0x6D8`**). Há um segundo bloco igual em `0x7D0..0x83C`. `mtspr 0x98` em `0x7B8` (CTRL, halt de falha). O interpretador devolve 0 para SPR nunca escrito, então os `mfspr` passam, mas o `rfid` precisa de implementação (Task 3) e o que o código espera de MSR depois dele define o modo de endereçamento (MMU ainda desligada?).
 
 Digest: não localizado ainda; procurar pela soma de rotação nas funções SHA em `0x5000..0x7800` e pela comparação com 20 bytes do header do CD. O CD é lido pela flash em `0x11A30` (a janela `0x8000_0200_C800_0000` do CB_A é a candidata a repetir).
+
+## Execução do CB_B (M1b, Task 4)
+
+`cargo run --release -p xenon-cpu --bin runcb -- dumps/stages/CB_A.mem dumps/FLASH_1.bin --stage cb_b` termina em `HANDOFF pc=0x4000300 digest_overrides=1` após 2.172.139 passos no CB_B (o `1` é o override do CB_A; o CB_B não precisou de nenhum). Variáveis: `XB_TRACE_MMIO=1` loga todo acesso a registrador; `--log-pc PC:r,r` imprime GPRs a cada passagem por um PC.
+
+O corpo do CD que o CB_B decifra na janela 2 da cache bate com `dumps/stages/CD.bin` byte a byte, exceto o header (bytes `0x7` e `0x10..0x1F`, reescritos pelo CB_B) e o byte `0x24A` (flag depois da string `XBOX_ROM_6`, 0 no arquivo e 1 depois do CB_B). Teste: `cargo test -p xenon-cpu -- --ignored` (`cd_in_ram_matches_stage_file`).
+
+### O que o CB_B faz (evidência de execução)
+
+1. Entrada `0x3D0`: marca POST no SoC (`+0x1010`), mexe em SPRs de configuração (`0x3F9`, `0x13E`, `0x3F4`).
+2. Lê as **fuses** em `0x8000_0200_0002_0000 + 0x200*n` (12 linhas de 64 bits, `0x4F3C..0x4FA0`) e confere a linha 0 (`0xC0FF…`); sem elas aloca POST `0x9B`. Dispositivo `dev/fuses.rs`, alimentado por `dumps/FUSE.bin`.
+3. **Cache travada como RAM**: `dcbzl` em `0x8000_017A_0300_0000` (64 KiB), copia a si mesmo para `+0x3000`, configura as SPRs `0x3B3..0x3B5` e `HRMOR` (`0x139`) e salta com `rfid` para `0x0300_36F0`. Depois zera uma segunda janela em `0x8000_017C_0400_0000`. As duas janelas respondem em EA `0x0300_0000` e `0x0400_0000` (alias no `Bus`); o `HRMOR` (OR em endereço com bit 63 zerado) também foi modelado, com efeito adiado até o próximo `isync`/`rfid` ou até a instrução seguinte.
+4. **Interpretador de bytecode** de programação de registradores (`0x9A8..0xDD4`, programa em `0x1000..0x4C50` do arquivo): palavras de 32 bits, opcode nos 6 bits altos (`<8` salto condicional r5 vs r6, `8/9` escrita, `10` leitura, `11` call/return, `20..` aritmética), seletores de operando nos bits `20..16` e `15..11`. Escreve em PCI config (`0x8000_0000_D000_xxxx`, `E400_15xx`, `EA00_xxxx`), conversa com a SMC e testa o DRAM. **HLE**: o `runcb` pula o programa inteiro (`Action::Jump` de `0x9A8` para `0xDDC`, r5 = 0), porque ele só programa controlador de memória/PCI/SMC; o DRAM (512 MiB em `0x8000_0000_0000_0000`) fica sempre mapeado. A SMC e as checagens que o programa fazia antes do hook estão modeladas mesmo assim (abaixo), para o caso de o hook sair.
+5. `lwbrx` do chip id em `0x8000_0200_E104_0000` (parte alta `>= 0x2000` ou POST `0xAF`; `>= 0x4000` liga o flag `0x80` do header).
+6. Lê o CD da flash, decifra, **escreve o CD na janela 2**, faz `dcbst` nas duas janelas, reprograma `0x3B3..0x3B5` para `0x408/0x405` e salta com `blr` para `0x0400_0000 + (entry & 0xFFFF)`.
+
+### Mailbox da SMC (BAR em `0xEA00_1000`, registradores little-endian)
+
+Ordem tirada do bytecode (`0x2D1C..0x2DC0`): enviar = escrever `4` em `+0x84`, 4 palavras em `+0x80`, `0` em `+0x84`; receber = esperar bit 2 de `+0x94`, escrever `4` em `+0x94`, ler 4 palavras de `+0x90`, escrever `0` em `+0x94`. O laço de espera sai para o caminho de envio quando bit 2 de `+0x84` está ligado. O primeiro comando é `0x12` (consulta de versão) e a resposta deve repetir `0x12` no primeiro byte. A SMC já nasce com uma mensagem zerada pendente. **Palpite**: os bytes `41 02 03` da resposta de versão e o conteúdo da mensagem inicial; nada nos dumps registra isso.
+
+### Palpites e valores sem prova (listados pra poder trocar)
+
+- `E400_15EC`: bits 8..11 forçados em 4 (`(reg >> 8) & 0xF == 4`, estado do link).
+- Chip id `0x5000_0000` LE: só precisa passar de `0x4000`.
+- `0x6_1000 = 0x2000_0000_0000_0000`: bit 61 = "fuses com dados".
+- Região "dram-hole" (`0x8000_0000_2000_0000..`) lê/escreve de volta; o programa sonda `0x2000_1800`.
