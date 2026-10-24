@@ -164,3 +164,15 @@ Varredura linear, sem separar código de dados. `.long` conta palavras não deco
      1 bne-
      1 beq+
 ```
+
+## Task 6 — estado (parcial)
+
+`cargo run -p xenon-cpu --bin runcb -- dumps/stages/CB_A.mem dumps/FLASH_1.bin [addr:len ...]`
+(`CB_A.mem` = CB_A decifrado com a chave derivada gravada em `+0x10`, como a 1BL deixa; gerado com `HMAC-SHA1(1BL key, salt)[:16]`).
+
+Descoberto:
+- `r31` (arg da 1BL) = **offset de flash do próximo estágio** (CB_B, `0x9EF0`); o código em `0x840` exige alinhado a 16 e em `0x80..0x7FFFF80`. A flash aparece em `0x8000_0200_C800_0000` (janela de 128 MiB).
+- CB_A relê o cabeçalho do próximo estágio pela janela, copia o corpo para a base da SRAM, deriva `key = HMAC(CB_A.key, salt || 16 zeros)[:16]` (função `0x13d8`; confere com Python), decifra `[0x20, size)` com RC4 (confere com Python) e compara um digest (função `0x950`, 20 bytes) com o armazenado em `CB_A+0x39C`.
+- Instruções que faltavam: só `stbu`. O interpretador roda ~14k passos até o header e o laço SHA/RC4 completo sem erro.
+
+Bloqueio: o digest calculado (`8f8b9a07…` com CB_B) **não bate** com o esperado (`717bccb4…`); CB_A2 (`0x9AF0`) também não. CB_A para em `0xF2` (halt `mtspr 0x98`). Hipóteses a testar: definição exata do RotSumSha em `0x950` (conferir contra implementação de referência), o CB_B do dump RGH3 ter sido regravado pelo builder, ou o digest esperado vir de outro ponto do header. Critério de saída da Task 6 **não atingido**.

@@ -218,6 +218,11 @@ impl Cpu {
                 self.gpr[ra] = ea;
             }
             38 => bus.write(self.ea(ra, simm), 1, self.gpr[rt] & 0xFF)?,
+            39 => {
+                let ea = self.ea(ra, simm);
+                bus.write(ea, 1, self.gpr[rt] & 0xFF)?;
+                self.gpr[ra] = ea;
+            }
             40 => self.gpr[rt] = bus.read(self.ea(ra, simm), 2)?,
             44 => bus.write(self.ea(ra, simm), 2, self.gpr[rt] & 0xFFFF)?,
             58 => {
@@ -473,5 +478,14 @@ mod tests {
     fn sc_lev2_traps() {
         let (mut c, mut b) = setup(&[0x4400_0042]);
         assert_eq!(c.run(&mut b, 10), Stop::Trap { pc: BASE });
+    }
+
+    #[test]
+    fn stbu_updates_base() {
+        let (mut c, mut b) = setup(&[d(39, 7, 3, 1)]);
+        c.gpr[3] = 0x2000;
+        c.gpr[7] = 0x1AB;
+        steps(&mut c, &mut b, 1);
+        assert_eq!((c.gpr[3], b.read(0x2001, 1).unwrap()), (0x2001, 0xAB));
     }
 }
