@@ -58,10 +58,12 @@
 **Interfaces:**
 - Produces: `research/cb/README.md` com (a) histograma de mnemônicos do CB_A, (b) constantes absolutas formadas por `lis` + `ori`/`addi` e o uso de cada uma, (c) endereço de carga provável com a evidência, (d) registradores lidos antes de escritos (estado que a 1BL deixa). Consumido pelas Tasks 3, 5 e 6.
 
-- [ ] **Step 1:** `tools/cbscan.py <CB_A.bin>` disassembla de `entry = 0x3D0` em diante (capstone, palavra a palavra, como em `tools/ppcdis.py`) e imprime os itens (a) a (d).
-- [ ] **Step 2:** Rodar em `dumps/stages/CB_A.bin`. Esperado: histograma não vazio e pelo menos uma constante na faixa do SoC. Se não houver constante, registrar isso no README.
-- [ ] **Step 3:** Escolher o endereço de carga: o base para o qual todo `bl`/`b` absoluto e todo salto fica dentro da imagem. Registrar a evidência; se mais de um base servir, registrar a ambiguidade e usar o menor.
-- [ ] **Step 4:** Commit `docs(cb): static scan of CB_A`.
+- [x] **Step 1:** `tools/cbscan.py <CB_A.bin>` disassembla de `entry = 0x3D0` em diante (capstone, palavra a palavra, como em `tools/ppcdis.py`) e imprime os itens (a) a (d).
+- [x] **Step 2:** Rodar em `dumps/stages/CB_A.bin`. Esperado: histograma não vazio e pelo menos uma constante na faixa do SoC. Se não houver constante, registrar isso no README.
+- [x] **Step 3:** Escolher o endereço de carga: o base para o qual todo `bl`/`b` absoluto e todo salto fica dentro da imagem. Registrar a evidência; se mais de um base servir, registrar a ambiguidade e usar o menor.
+- [x] **Step 4:** Commit `docs(cb): static scan of CB_A`.
+
+**Revalidação em 2026-10-24:** commit original `1083f09`; scanner executado novamente com Capstone 5.0.7. Histograma completo e evidências em `research/cb/README.md`. Ajuste ao Step 3: os 199 branches diretos são relativos e não determinam uma base; adota-se `0x8000_0200_0001_0000` pela construção de `r2` e leitura do header, em vez do menor valor arbitrário. Estado inicial de `r0`/`r31` permanece hipótese, não captura da 1BL.
 
 ### Task 3: Núcleo de inteiros
 
