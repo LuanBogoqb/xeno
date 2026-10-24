@@ -183,4 +183,37 @@ Critério de saída atingido (PC no entry do CB_B), com o hash forçado.
 
 ## Alvo real do handoff (M1b, Task 1)
 
-Desmontagem do CB_A em `0x4A8..0x4B0`: `clrlwi r3,r3,16; addis r3,r3,0x200; mtlr r3`. `clrlwi` zera os 32 bits altos, então o alvo é o endereço de **32 bits** `0x0200_0000 + (entry & 0xFFFF)`, não `0x8000_0200_…`. Regra adotada: alias no `Bus` (`map_alias(0x0200_0000, SRAM_SIZE, SRAM_BASE)`), de modo que `0x0200_03D0` lê `SRAM_BASE + 0x3D0`, onde o CB_A deixa o corpo do CB_B (a rotina `0x4A8` zera os GPRs e `r31 = 0x11A30`). Não há prova de hardware dessa equivalência; é a que faz o corpo decifrado ficar executável.
+Desmontagem do CB_A em `0x4A8..0x4B0`: `clrlwi r3,r3,16; addis r3,r3,0x200; mtlr r3`. `clrlwi` zera os 32 bits altos, então o alvo é o endereço de **32 bits** `0x0200_0000 + (entry & 0xFFFF)`, não `0x8000_0200_…`. Regra adotada: alias no `Bus` (`map_alias(0x0200_0000, 0x1_0000, CB_A_LOAD)`), de modo que `0x0200_03D0` lê `0x8000_0200_0001_03D0`, onde o CB_A deixa o CB_B (header `CB3A` em `SRAM+0x10000`, medido no dump pós-handoff; a base `SRAM+0` fica zerada) (a rotina `0x4A8` zera os GPRs e `r31 = 0x11A30`). Não há prova de hardware dessa equivalência; é a que faz o corpo decifrado ficar executável.
+
+## CB_B (M1b, Task 2) — varredura estática
+
+Conferido em 2026-10-24 com `cargo run --release -p xenon-cpu --bin opscan -- dumps/stages/CB_B.bin > unk.txt` e `python tools/cbscan.py dumps/stages/CB_B.bin unk.txt` (a ferramenta ganhou a seção `(a2)`: mnemônicos que o interpretador não decodifica; `opscan` testa decodificando de fato, não por lista).
+
+**CB_B.bin é texto claro no dump RGH3** (`tools/bootchain.py`: "RGH image stores CB_B already decrypted"; o campo `key` do header `+0x10` é a chave usada para derivar a do CD). Consequência: o `CB_B` que o CB_A decifra na SRAM (`dumps/stages/CB_B.mem`) é ruído; o runner precisa **sobrescrever** a SRAM `CB_A_LOAD..+0x7B40` com `CB_B.bin` no handoff (Task 4). Imagem: `0x7B40` bytes, entry `0x3D0`. Cabeçalho `CB3A`, flags `0x0801` no `.mem` contra `0x0800`-família no arquivo.
+
+Código e dados se misturam: blocos `0x1000..0x4800` têm entropia de dado (histograma sem sentido: `xsaddsp`, `vmsum*`, `twi`, `addpcis`, 1.957 `.long`), código claro em `0x3D0..0x1000` e `0x5000..0x7800` (SHA/RC4/HMAC como no CB_A). Os mnemônicos ruído (FP, VMX, `twi`, `addpcis`, `attn`) **não** entram na Task 3.
+
+### (a2) Mnemônicos de código que faltam no interpretador (candidatos; confirmar por execução)
+
+`sync isync dcbst dcbzl mfmsr rfid mftb mulli mullw mulld divwu divdu addic addic. subfe xori xoris andc cntlzw slw srw sld srd rlwnm rlwnm. rldcr rotlw lha lhbrx sthbrx lwbrx stwbrx ldx stdx mcrf mfocrf` mais o word `0x7C201A24` na entrada (`0x3D4`, `lis r3,0x100` antes), não decodificado pelo capstone.
+
+### (b) Endereços absolutos
+
+| Endereço | Visto em | Papel provável |
+|---|---|---|
+| `0x8000_0200_0006_0000` | `0x3E8` | bloco SoC; `std 0x2000_..._0000 → +0x1010` na entrada (marcador de estágio, como `0xD000..` no CB_A) |
+| `0x8000_0200_0001_0000` | `0x404`, `0x41C` | base da SRAM da imagem; `lhz/sth +6` (flags do header): `andc 0x600`, `ori 0x20` |
+| `0x8000_0200_0001_F300` | `0x408` | stack (`r1`), igual ao CB_A; `0x440` zera `0x680` doublewords abaixo de `r1+0x100` se bit 0x800 estava ligado |
+| `0x8000_0200_0003_0000` (+`0x20`) | `0x45C..0x46C` | dispositivo desconhecido; escreve `0x2000_0000_0000_0000` e relê (`isync` ao redor) |
+| `0x8000_0200_0006_1000` (+`0x1A0`) | `0x490..0x498` | SoC; escreve `0x1FF` |
+| `0x8000_0200_E104_0000` | `0x720` | desconhecido |
+| `0x8000_017A_0300_xxxx`, `0x8000_017A_0301_xxxx` | ~60 constantes, `0x550..0x5570` | **bloco grande de registradores** (candidato: controlador de DRAM/PCI bridge; em Free60 o northbridge fica em `0x…EA00_xxxx`, não confere, então tratar como não identificado) |
+| `0x8000_017C_0000`, `0x8000_017C_0400` | poucas | idem, bloco vizinho |
+
+O rastreador de constantes é linear e cego a fluxo; endereços de dado do bloco `0x1000..0x4800` podem ser falsos.
+
+### (c) SPRs, (d)
+
+SPRs tocados em `0x49C..0x6D8`: `0x3F9`, `0x13E`, `0x3F4`, `0x3F1` (leitura-modificação-escrita com `sync/isync`, estilo HID/config de CPU), `0x3B3/0x3B4/0x3B5`, `0x139`, `0x1A/0x1B` (SRR0/SRR1: monta o retorno e **`rfid` em `0x6D8`**). Há um segundo bloco igual em `0x7D0..0x83C`. `mtspr 0x98` em `0x7B8` (CTRL, halt de falha). O interpretador devolve 0 para SPR nunca escrito, então os `mfspr` passam, mas o `rfid` precisa de implementação (Task 3) e o que o código espera de MSR depois dele define o modo de endereçamento (MMU ainda desligada?).
+
+Digest: não localizado ainda; procurar pela soma de rotação nas funções SHA em `0x5000..0x7800` e pela comparação com 20 bytes do header do CD. O CD é lido pela flash em `0x11A30` (a janela `0x8000_0200_C800_0000` do CB_A é a candidata a repetir).

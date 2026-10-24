@@ -28,7 +28,7 @@ fn main() {
     let mut cpu = Cpu::new(CB_A_LOAD + entry);
     initial_regs(&mut cpu);
 
-    bus.map_alias(SRAM_ALIAS, SRAM_SIZE as u64, SRAM_BASE);
+    bus.map_alias(SRAM_ALIAS, 0x1_0000, CB_A_LOAD);
     let mut hooks = Hooks::new();
     // Scope decision "no glitch": the RGH3 CB_B does not match the digest stored in CB_A (the real
     // console glitches this compare), so force the compare result to "equal".

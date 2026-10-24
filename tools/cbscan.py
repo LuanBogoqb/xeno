@@ -66,13 +66,23 @@ def entry_regs(ins, n=64):
     return readfirst
 
 
-def main(path):
+def missing(ins, unknown):
+    """Mnemonic histogram of the words the interpreter does not decode (offsets from `opscan`)."""
+    return Counter(i.mnemonic if i else ".long" for off, i in ins if off in unknown)
+
+
+def main(path, unknown_path=None):
     d = open(path, "rb").read()
     entry, ins = disasm(d)
     print(f"entry=0x{entry:x} size=0x{len(d):x} words={len(ins)}")
     print("\n## (a) mnemonics")
     for m, n in Counter(i.mnemonic if i else ".long" for _, i in ins).most_common():
         print(f"{n:6d} {m}")
+    if unknown_path:
+        unknown = {int(l.split()[0], 16) for l in open(unknown_path) if l.strip()}
+        print("\n## (a2) mnemonics the interpreter does not decode (cargo run --bin opscan)")
+        for m, n in missing(ins, unknown).most_common():
+            print(f"{n:6d} {m}")
     print("\n## (b) constants built in registers, value >= 0x10000")
     for v, off in sorted(constants(ins).items()):
         print(f"0x{v:016x}  first at 0x{off:x}")
@@ -89,4 +99,4 @@ def main(path):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    main(*sys.argv[1:3])
