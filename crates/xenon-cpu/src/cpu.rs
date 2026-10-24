@@ -1,6 +1,9 @@
 use crate::alu::{mask64, rotl64};
 use crate::mem::{Bus, BusError};
+use std::collections::HashMap;
 
+/// Hypervisor state bit of the MSR (bit 3 in IBM numbering).
+pub const MSR_HV: u64 = 1 << 60;
 const XER_CA: u64 = 1 << 29;
 const XER_SO: u64 = 1 << 31;
 
@@ -26,6 +29,8 @@ pub struct Cpu {
     pub cr: u32,
     pub xer: u64,
     pub msr: u64,
+    /// SPRs without dedicated state; reads of never-written ones give 0.
+    pub spr: HashMap<u16, u64>,
 }
 
 fn sext16(v: u32) -> u64 {
@@ -34,7 +39,7 @@ fn sext16(v: u32) -> u64 {
 
 impl Cpu {
     pub fn new(entry: u64) -> Cpu {
-        Cpu { gpr: [0; 32], pc: entry, lr: 0, ctr: 0, cr: 0, xer: 0, msr: 0 }
+        Cpu { gpr: [0; 32], pc: entry, lr: 0, ctr: 0, cr: 0, xer: 0, msr: 0, spr: HashMap::new() }
     }
 
     pub fn run(&mut self, bus: &mut Bus, max_steps: u64) -> Stop {
@@ -127,6 +132,13 @@ impl Cpu {
                 if taken {
                     next = if w & 2 != 0 { ds } else { pc.wrapping_add(ds) };
                 }
+            }
+            17 => {
+                // sc with LEV=2 is the hypervisor call
+                if w & 2 != 0 && w >> 5 & 0x7F == 2 {
+                    return Err(Stop::Trap { pc });
+                }
+                return Err(bad);
             }
             18 => {
                 let disp = ((w & 0x03FF_FFFC) as i32) << 6 >> 6;
@@ -291,7 +303,7 @@ impl Cpu {
                     1 => &mut self.xer,
                     8 => &mut self.lr,
                     9 => &mut self.ctr,
-                    _ => return Err(bad),
+                    n => self.spr.entry(n as u16).or_insert(0),
                 };
                 if xo == 339 {
                     self.gpr[rt] = *reg;
@@ -432,5 +444,34 @@ mod tests {
             c.run(&mut b, 10),
             Stop::Unmapped(BusError::Unmapped { addr: 0x9000_0000, size: 4, write: false })
         );
+    }
+
+    #[test]
+    fn mtspr_mfspr_roundtrip_unknown_spr() {
+        // mtspr 0x98,r3 ; mfspr r4,0x98  (spr field is split: low5 | high5<<5)
+        let f = |xo: u32, rt: u32| 31 << 26 | rt << 21 | (0x98 & 31) << 16 | (0x98 >> 5) << 11 | xo << 1;
+        let (mut c, mut b) = setup(&[f(467, 3), f(339, 4)]);
+        c.gpr[3] = 0xCAFE;
+        steps(&mut c, &mut b, 2);
+        assert_eq!(c.gpr[4], 0xCAFE);
+    }
+
+    #[test]
+    fn mflr_mtlr() {
+        let (mut c, mut b) = setup(&[31 << 26 | 3 << 21 | 8 << 16 | 467 << 1, 31 << 26 | 4 << 21 | 8 << 16 | 339 << 1]);
+        c.gpr[3] = 0x1234;
+        steps(&mut c, &mut b, 2);
+        assert_eq!((c.lr, c.gpr[4]), (0x1234, 0x1234));
+    }
+
+    #[test]
+    fn msr_hv_bit_is_bit60() {
+        assert_eq!(MSR_HV, 0x1000_0000_0000_0000);
+    }
+
+    #[test]
+    fn sc_lev2_traps() {
+        let (mut c, mut b) = setup(&[0x4400_0042]);
+        assert_eq!(c.run(&mut b, 10), Stop::Trap { pc: BASE });
     }
 }
