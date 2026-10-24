@@ -1,0 +1,3 @@
+@echo off
+call "C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvars64.bat" >nul
+cl /nologo /O2 /FIshim.h /I . /I include /I 3rdparty\excrypt /I 3rdparty\mspack /Fe:xenon-bltool.exe source\*.c 3rdparty\excrypt\excrypt_aes.c 3rdparty\excrypt\excrypt_bn.c 3rdparty\excrypt\excrypt_bn_key.c 3rdparty\excrypt\excrypt_bn_mod.c 3rdparty\excrypt\excrypt_bn_sig.c 3rdparty\excrypt\excrypt_des.c 3rdparty\excrypt\excrypt_ecc.c 3rdparty\excrypt\excrypt_md5.c 3rdparty\excrypt\excrypt_mem.c 3rdparty\excrypt\excrypt_parve.c 3rdparty\excrypt\excrypt_rc4.c 3rdparty\excrypt\excrypt_rotsum.c 3rdparty\excrypt\excrypt_sha.c 3rdparty\excrypt\excrypt_sha2.c 3rdparty\excrypt\rijndael.c 3rdparty\mspack\lzxd.c 3rdparty\mspack\system.c

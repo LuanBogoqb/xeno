@@ -1,0 +1,8 @@
+samples/
+__pycache__/
+*.img
+dumps/
+.superpowers/
+target/
+.superpowers/
+target/
