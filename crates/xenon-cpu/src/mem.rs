@@ -46,7 +46,10 @@ impl Bus {
         let err = BusError::Unmapped { addr, size, write };
         let i = self.regions.partition_point(|r| r.base <= addr);
         let r = self.regions.get_mut(i.checked_sub(1).ok_or(err)?).ok_or(err)?;
-        if addr + size as u64 <= r.base + r.size { Ok(r) } else { Err(err) }
+        match addr.checked_add(size as u64) {
+            Some(end) if end <= r.base + r.size => Ok(r),
+            _ => Err(err),
+        }
     }
 
     pub fn load(&mut self, addr: u64, bytes: &[u8]) {
@@ -126,5 +129,13 @@ mod tests {
         let mut bus = Bus::new();
         bus.map_device(0x2000, 0x100, Box::new(LastOff(0)));
         assert_eq!(bus.read(0x2010, 4).unwrap(), 0x10);
+    }
+
+    #[test]
+    fn address_overflow_errors_instead_of_panicking() {
+        let mut b = Bus::new();
+        b.map_ram(0, 0x1000);
+        assert!(b.read(u64::MAX - 1, 4).is_err());
+        assert!(b.write(u64::MAX - 1, 4, 0).is_err());
     }
 }
