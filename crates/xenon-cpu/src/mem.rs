@@ -1,0 +1,130 @@
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum BusError {
+    Unmapped { addr: u64, size: usize, write: bool },
+}
+
+pub trait Device {
+    fn read(&mut self, off: u64, size: usize) -> Result<u64, BusError>;
+    fn write(&mut self, off: u64, size: usize, val: u64) -> Result<(), BusError>;
+}
+
+enum Kind {
+    Ram(Vec<u8>),
+    Dev(Box<dyn Device>),
+}
+
+struct Region {
+    base: u64,
+    size: u64,
+    kind: Kind,
+}
+
+#[derive(Default)]
+pub struct Bus {
+    regions: Vec<Region>,
+}
+
+impl Bus {
+    pub fn new() -> Bus {
+        Bus::default()
+    }
+
+    fn insert(&mut self, r: Region) {
+        let at = self.regions.partition_point(|x| x.base < r.base);
+        self.regions.insert(at, r);
+    }
+
+    pub fn map_ram(&mut self, base: u64, size: usize) {
+        self.insert(Region { base, size: size as u64, kind: Kind::Ram(vec![0; size]) });
+    }
+
+    pub fn map_device(&mut self, base: u64, size: u64, dev: Box<dyn Device>) {
+        self.insert(Region { base, size, kind: Kind::Dev(dev) });
+    }
+
+    fn find(&mut self, addr: u64, size: usize, write: bool) -> Result<&mut Region, BusError> {
+        let err = BusError::Unmapped { addr, size, write };
+        let i = self.regions.partition_point(|r| r.base <= addr);
+        let r = self.regions.get_mut(i.checked_sub(1).ok_or(err)?).ok_or(err)?;
+        if addr + size as u64 <= r.base + r.size { Ok(r) } else { Err(err) }
+    }
+
+    pub fn load(&mut self, addr: u64, bytes: &[u8]) {
+        for (i, b) in bytes.iter().enumerate() {
+            self.write(addr + i as u64, 1, *b as u64).expect("load outside mapped region");
+        }
+    }
+
+    pub fn read(&mut self, addr: u64, size: usize) -> Result<u64, BusError> {
+        let r = self.find(addr, size, false)?;
+        let off = addr - r.base;
+        match &mut r.kind {
+            Kind::Ram(m) => Ok(m[off as usize..off as usize + size]
+                .iter()
+                .fold(0u64, |a, b| (a << 8) | *b as u64)),
+            Kind::Dev(d) => d.read(off, size),
+        }
+    }
+
+    pub fn write(&mut self, addr: u64, size: usize, val: u64) -> Result<(), BusError> {
+        let r = self.find(addr, size, true)?;
+        let off = addr - r.base;
+        match &mut r.kind {
+            Kind::Ram(m) => {
+                for i in 0..size {
+                    m[off as usize + i] = (val >> (8 * (size - 1 - i))) as u8;
+                }
+                Ok(())
+            }
+            Kind::Dev(d) => d.write(off, size, val),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct LastOff(u64);
+    impl Device for LastOff {
+        fn read(&mut self, off: u64, _size: usize) -> Result<u64, BusError> {
+            self.0 = off;
+            Ok(self.0)
+        }
+        fn write(&mut self, off: u64, _size: usize, _val: u64) -> Result<(), BusError> {
+            self.0 = off;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn ram_is_big_endian() {
+        let mut bus = Bus::new();
+        bus.map_ram(0x1000, 0x100);
+        bus.write(0x1000, 8, 0x1122334455667788).unwrap();
+        assert_eq!(bus.read(0x1000, 4).unwrap(), 0x11223344);
+    }
+
+    #[test]
+    fn unmapped_read_errors() {
+        let mut bus = Bus::new();
+        assert_eq!(
+            bus.read(0x9000, 4),
+            Err(BusError::Unmapped { addr: 0x9000, size: 4, write: false })
+        );
+    }
+
+    #[test]
+    fn access_crossing_region_end_errors() {
+        let mut bus = Bus::new();
+        bus.map_ram(0x1000, 16);
+        assert!(bus.read(0x100C, 8).is_err());
+    }
+
+    #[test]
+    fn device_gets_offset() {
+        let mut bus = Bus::new();
+        bus.map_device(0x2000, 0x100, Box::new(LastOff(0)));
+        assert_eq!(bus.read(0x2010, 4).unwrap(), 0x10);
+    }
+}
