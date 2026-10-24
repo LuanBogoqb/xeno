@@ -35,3 +35,14 @@ Mais frequentes: `addi li add mr bl std ld cmplwi lwz stw rotlwi xor mtctr ori b
 
 - Nenhum branch absoluto (`ba/bla`).
 - Único SPR tocado: `0x98` (CTRL), só como halt de falha. Não há `sc`, `rfid`, `mtmsr` nem instruções de cache.
+
+## Primeira execução (`runcb`, Task 5)
+
+`cargo run -p xenon-cpu --bin runcb -- dumps/stages/CB_A.bin`: 6 instruções e para no primeiro acesso ao SoC.
+
+```
+steps: 6
+stop: Unmapped { addr: 0x8000_0200_0006_1010, size: 8, write: true }   # std r4,0x1010(r3), r3=0x8000020000060000, r4=0xD000...
+```
+
+Confere com o mapa acima. Próximo passo: mapear o bloco do SoC como dispositivo (Task 6).
