@@ -175,4 +175,8 @@ Descoberto:
 - CB_A relê o cabeçalho do próximo estágio pela janela, copia o corpo para a base da SRAM, deriva `key = HMAC(CB_A.key, salt || 16 zeros)[:16]` (função `0x13d8`; confere com Python), decifra `[0x20, size)` com RC4 (confere com Python) e compara um digest (função `0x950`, 20 bytes) com o armazenado em `CB_A+0x39C`.
 - Instruções que faltavam: só `stbu`. O interpretador roda ~14k passos até o header e o laço SHA/RC4 completo sem erro.
 
-Bloqueio: o digest calculado (`8f8b9a07…` com CB_B) **não bate** com o esperado (`717bccb4…`); CB_A2 (`0x9AF0`) também não. CB_A para em `0xF2` (halt `mtspr 0x98`). Hipóteses a testar: definição exata do RotSumSha em `0x950` (conferir contra implementação de referência), o CB_B do dump RGH3 ter sido regravado pelo builder, ou o digest esperado vir de outro ponto do header. Critério de saída da Task 6 **não atingido**.
+Resolvido: o digest é RotSumSha (função `0x950`): acumula 4×u64 com soma/rotação sobre palavras de 8 bytes de `hdr[0:0x10]` e `corpo[0x140:size]`, depois SHA-1 de `estado,estado,buf1,buf2,~estado,~estado`. Reimplementado em Python e bate bit a bit com o interpretador (`8f8b9a07…` para o CB_B). O esperado em `CB_A+0x39C` (`717bccb4…`) **não** bate com o CB_B deste dump: é o CB_B regravado do RGH3, e o console real passa por glitch nessa comparação. Pelo escopo "sem glitch", `runcb` força o resultado da comparação em `0x7F0` (relocado) para "igual" e registra `hash_ok=false`.
+
+Resultado: `HANDOFF pc=0x20003d0 hash_ok=false` após ~2,03 M instruções. A rotina `0x4A8` zera os GPRs, passa `r31 = 0x11A30` (offset do CD, próximo estágio) e salta para `0x0200_0000 + (entry & 0xFFFF)`. Esse endereço de fetch ainda não está mapeado (a SRAM aparece em `0x8000_0200_…`); o alias real-mode fica para o plano do CB_B.
+
+Critério de saída atingido (PC no entry do CB_B), com o hash forçado.
