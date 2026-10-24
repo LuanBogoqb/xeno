@@ -65,7 +65,8 @@ fn main() {
         e => println!("end: {e:?}"),
     }
     println!("steps: {steps}");
-    if stage == "cb_b" && matches!(end, StageEnd::Handoff { .. }) {
+    let depth = ["cb_a", "cb_b", "cd"].iter().position(|n| *n == stage).expect(usage);
+    if depth >= 1 && matches!(end, StageEnd::Handoff { .. }) {
         // The RGH3 image stores CB_B in plaintext, so CB_A's RC4 pass left noise in the SRAM: put the real
         // image where CB_A would have left it (decisions.md 3, no glitch).
         let size = u32::from_be_bytes(flash_copy[next + 12..next + 16].try_into().unwrap()) as usize;
@@ -85,6 +86,12 @@ fn main() {
         println!("CB_B steps: {s2}");
         (end, steps) = (e2, steps + s2);
     }
+    if depth >= 2 && matches!(end, StageEnd::Handoff { .. }) {
+        let (e3, s3) = run_until(&mut cpu, &mut bus, &hooks, u64::MAX, max_steps);
+        println!("CD end: {}
+CD steps: {s3}", fmt_end(&e3));
+        (end, steps) = (e3, steps + s3);
+    }
     if !matches!(end, StageEnd::Handoff { .. }) {
         println!("pc={:#x}; words before pc:", cpu.pc);
         for i in (1..=12u64).rev() {
@@ -102,5 +109,5 @@ fn main() {
     for (i, r) in cpu.gpr.iter().enumerate() {
         print!("r{i:<2}={r:016x}{}", if i % 4 == 3 { "\n" } else { " " });
     }
-    println!("lr={:016x} ctr={:016x} cr={:08x}", cpu.lr, cpu.ctr, cpu.cr);
+    println!("lr={:016x} ctr={:016x} cr={:08x} msr={:016x} hrmor={:x}", cpu.lr, cpu.ctr, cpu.cr, cpu.msr, bus.hrmor);
 }

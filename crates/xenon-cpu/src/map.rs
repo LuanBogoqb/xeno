@@ -20,9 +20,9 @@ pub const SRAM_ALIAS: u64 = 0x0200_0000;
 /// Relocated address of the CB_A digest compare result (r3), forced to "equal" (no glitch).
 pub const CB_A_DIGEST_HOOK: u64 = CB_A_LOAD + 0xC000 + 0x7F0;
 /// Locked-cache RAM CB_B allocates with `dcbzl` (0x548..0x578), copies itself into at +0x3000 and
-/// continues from via `rfid` with HRMOR = 0x017A_0300_0000. 0x4_0000 covers every constant seen (up to 0x0301_02F0).
+/// continues from via `rfid` with HRMOR = 0x017A_0300_0000. 0x40_0000 covers CD's fill loop at 0x0328_0000..0x032A_AA00.
 pub const CACHE_RAM_BASE: u64 = 0x8000_017A_0300_0000;
-pub const CACHE_RAM_SIZE: usize = 0x4_0000;
+pub const CACHE_RAM_SIZE: usize = 0x40_0000;
 /// Main memory (512 MiB on Corona-era 360s). CB_B's bytecode writes it right after programming the memory
 /// controller (first write: +0x4 at 0x7B8..).
 pub const DRAM_BASE: u64 = 0x8000_0000_0000_0000;
@@ -56,7 +56,7 @@ pub const REG_PRESETS: &[(u64, u64, &str)] = &[
     (0x8000_0200_0006_1000, 0x2000_0000_0000_0000, "fuse status"),
     // CB_B 0x724..0x73C: lwbrx chip id, top half must be >= 0x2000 (else POST 0xAF); >= 0x4000 also sets header flag 0x80.
     // Corona is a late chip, so LE 0x5000_0000 (raw 0x0000_0050). The exact id is a guess.
-    (0x8000_0200_E104_0000, 0x0000_0050, "chip id (guess)"),
+    (0x8000_0000_E104_0000, 0x0000_0050, "chip id (guess)"),
 ];
 
 /// SMC mailbox (PCI BAR the stages program at config 0xD015_0010 to 0xEA00_1000).
@@ -79,12 +79,6 @@ pub const REG_BLOCKS: &[(&str, u64, u64)] = &[
     ("pcicfg", 0x8000_0000_C000_0000, 0x2A00_1000),
     ("pcicfg2", SMC_BASE + SMC_SIZE, 0x15FF_E000),
     // CB_B 0x720: lwbrx of the chip id, top half compared with 0x2000
-    // CB_B 0x8640..: writes 0x8000_0200_D000_0010 (a second window onto the same kind of config space, behind the flash window)
-    ("pcicfg-b", 0x8000_0200_D000_0000, 0x3000_0000),
-    // CB_B 0x86B0..: writes 0x8000_0200_EA00_0000; the rest of the 0xE000_0000 peripheral window, around the chip id page
-    ("hw-e0", 0x8000_0200_E000_0000, 0x0104_0000),
-    ("hw-e1", 0x8000_0200_E105_0000, 0x2000_0000 - 0x0105_0000),
-    ("chipid", 0x8000_0200_E104_0000, 0x1_0000),
 ];
 
 /// The platform as the CB stages see it: SRAM (with its 32-bit alias), flash window and register blocks.
@@ -99,6 +93,9 @@ pub fn build_bus(flash: Vec<u8>, fuses: FuseLines) -> Bus {
     bus.map_ram(CACHE_RAM2_BASE, CACHE_RAM2_SIZE);
     bus.map_alias(CACHE_RAM2_BASE & !(1 << 63), CACHE_RAM2_SIZE as u64, CACHE_RAM2_BASE);
     bus.map_alias(CACHE_WINDOW2_EA, CACHE_RAM2_SIZE as u64, CACHE_RAM2_BASE);
+    // The 0x0200 in bits 32..47 is ignored by the peripheral space: CB_B uses 0x8000_0000_Dxxx_xxxx/Exxx_xxxx, CD
+    // uses 0x8000_0200_Dxxx_xxxx/Exxx_xxxx for the same registers (e.g. the SMC BAR).
+    bus.map_alias(0x8000_0200_D000_0000, 0x3000_0000, 0x8000_0000_D000_0000);
     bus.map_device(FLASH_BASE, FLASH_SIZE, Box::new(FlashWindow::new(flash)));
     bus.map_device(SMC_BASE, SMC_SIZE, Box::new(SmcMailbox::new(SMC_BASE)));
     bus.map_device(FUSE_BASE, FUSE_SIZE, Box::new(fuses));

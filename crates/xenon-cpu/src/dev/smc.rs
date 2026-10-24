@@ -16,6 +16,8 @@ const TX_DATA: u64 = 0x80;
 const TX_CTRL: u64 = 0x84;
 const RX_DATA: u64 = 0x90;
 const RX_CTRL: u64 = 0x94;
+/// +0x14 takes a command (CD 0x5330 writes 0x2E00_0000, plain big-endian stw) and +0x18 bit 6 (0x0200_0000) says it is done.
+const CMD_STATUS: u64 = 0x18;
 const BIT2_RAW: u64 = 0x0400_0000;
 
 type Msg = [u32; 4];
@@ -63,6 +65,7 @@ impl Device for SmcMailbox {
         let v = match off {
             TX_CTRL => Some(if self.tx_open || !self.rx_msgs.is_empty() { 0 } else { BIT2_RAW }),
             RX_CTRL => Some(if self.rx_msgs.is_empty() { 0 } else { BIT2_RAW }),
+            CMD_STATUS => Some(0x0200_0000),
             RX_DATA => {
                 let w = self.rx_msgs.front().and_then(|m| m.get(self.rx_cursor)).copied().unwrap_or(0);
                 self.rx_cursor += 1;
@@ -165,6 +168,13 @@ mod tests {
         recv(&mut d);
         d.write(TX_CTRL, 4, 0).unwrap();
         assert_eq!(d.read(RX_CTRL, 4).unwrap(), 0);
+    }
+
+    #[test]
+    fn command_status_reports_done() {
+        let mut d = SmcMailbox::new(0xEA00_1000);
+        d.write(0x14, 4, 0x2E00_0000).unwrap();
+        assert_eq!(d.read(0x18, 4).unwrap() & 0x0200_0000, 0x0200_0000);
     }
 
     #[test]

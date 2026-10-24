@@ -243,3 +243,13 @@ Ordem tirada do bytecode (`0x2D1C..0x2DC0`): enviar = escrever `4` em `+0x84`, 4
 - Chip id `0x5000_0000` LE: só precisa passar de `0x4000`.
 - `0x6_1000 = 0x2000_0000_0000_0000`: bit 61 = "fuses com dados".
 - Região "dram-hole" (`0x8000_0000_2000_0000..`) lê/escreve de volta; o programa sonda `0x2000_1800`.
+
+## CD (M1b, Task 5) — estado parcial, parado na MMU
+
+`runcb ... --stage cd` roda o CD por ~43.400 passos e para em `Unmapped read 4 bytes at 0x17a130000fc` (`CD 0xBA0`: `lis r11,0x1000; lwz r10,0xFC(r11)`). Antes disso o CD:
+
+- marca POST no SoC, fala com o BAR em `0x8000_0200_EA00_1000` (alias do `0x8000_0000_EA00_1000`; `+0x14` recebe `0x2E00_0000` e `+0x18` bit 6 diz "pronto");
+- usa `slbmte` e `mtmsrd` (agora implementados como estado, sem tradução) e liga `MSR.IR` (`msr=0x1000_0000_0000_0010`);
+- monta uma **TLB por software** com `mtspr 0x3B3/0x3B5/0x3B4` (96 escritas, `XB_TRACE_SPR=1` as lista). Padrões vistos: (A) 8 entradas de 16 MiB, `3B4=0x18xx..0x1Fxx`, `3B5=0xC8xx_11BF`: EA `0x1800_0000..0x1FFF_FFFF` -> janela de flash; uma entrada EA `0x1000_0000` -> `0x0200_0000_xxxx` (`3B5=0x0200_0000_11BE`); (B) entradas de 64 KiB identidade nos EAs `0x28_0000..0x3D_0000` (`3B5` = EA<<17 | 1<<40 | EA | 0x196; função em `CD 0x490`).
+
+**Bloqueio**: o significado exato de `3B3/3B4/3B5` (qual é índice, qual é VPN, tamanhos de página, quando o `3B4` grava a entrada) não está documentado em lugar nenhum que eu tenha achado (Free60 e buscas gerais não trazem). A leitura em `EA 0x1000_00FC` depende dela: precisa saber a que endereço real o EA `0x1000_0000` aponta. Daqui em diante (CD, CE, CF/CG) a execução depende de um modelo de TLB/MMU decidido com base em palpite.

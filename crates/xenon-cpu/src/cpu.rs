@@ -35,6 +35,8 @@ pub struct Cpu {
     /// or else after the instruction that follows the write (CB_B changes it right before a `blr`).
     pending_hrmor: Option<u64>,
     hrmor_armed: bool,
+    /// Segment lookaside buffer: (RB, RS) as written by slbmte, indexed by RB[58..63] (the entries are not translated yet).
+    pub slb: [(u64, u64); 64],
     /// SPRs without dedicated state; reads of never-written ones give 0.
     pub spr: HashMap<u16, u64>,
 }
@@ -50,7 +52,7 @@ fn sext16(v: u32) -> u64 {
 
 impl Cpu {
     pub fn new(entry: u64) -> Cpu {
-        Cpu { gpr: [0; 32], pc: entry, lr: 0, ctr: 0, cr: 0, xer: 0, msr: 0, tb: 0, pending_hrmor: None, hrmor_armed: false, spr: HashMap::new() }
+        Cpu { gpr: [0; 32], pc: entry, lr: 0, ctr: 0, cr: 0, xer: 0, msr: 0, tb: 0, pending_hrmor: None, hrmor_armed: false, slb: [(0, 0); 64], spr: HashMap::new() }
     }
 
     pub fn run(&mut self, bus: &mut Bus, max_steps: u64) -> Stop {
@@ -434,12 +436,22 @@ impl Cpu {
                 };
             }
             83 => self.gpr[rt] = self.msr,
+            146 => self.msr = s,
+            178 => {
+                // mtmsrd: L=1 only touches EE (bit 48) and RI (bit 62)
+                let mask = if w >> 16 & 1 == 1 { 0x8002 } else { u64::MAX };
+                self.msr = self.msr & !mask | s & mask;
+            }
+            402 => self.slb[(b & 63) as usize] = (b, s), // slbmte RS,RB
+            434 | 498 => {} // slbie / slbia: entries are not translated yet
+            851 => self.gpr[rt] = self.slb[(b & 63) as usize].1, // slbmfev
+            915 => self.gpr[rt] = self.slb[(b & 63) as usize].0, // slbmfee
             371 => {
                 let tbr = (w >> 16 & 31) | (w >> 11 & 31) << 5;
                 self.gpr[rt] = if tbr == 269 { self.tb >> 32 } else { self.tb };
             }
             // barriers, cache management and TLB/SLB invalidates: no cache or MMU is modelled
-            598 | 854 | 54 | 86 | 982 | 470 | 278 | 246 | 274 | 306 | 498 => {}
+            598 | 854 | 54 | 86 | 982 | 470 | 278 | 246 | 274 | 306 => {}
             1014 => {
                 // dcbz zeroes a 32-byte line, dcbzl (RT bit 0) a 128-byte one
                 let line = if rt & 1 == 1 { 128 } else { 32 };
@@ -460,6 +472,9 @@ impl Cpu {
                     self.gpr[rt] = *reg;
                 } else {
                     *reg = s;
+                    if (0x3B0..0x3B8).contains(&spr) && std::env::var_os("XB_TRACE_SPR").is_some() {
+                        eprintln!("mtspr {spr:#x} = {s:#x} at pc {pc:#x}");
+                    }
                     if spr == 0x139 {
                         self.pending_hrmor = Some(s);
                         self.hrmor_armed = false;
@@ -906,5 +921,32 @@ mod tests {
         assert_eq!(b.hrmor, 0);
         steps(&mut c, &mut b, 1);
         assert_eq!((c.pc, b.hrmor), (0x40, 0x10000));
+    }
+
+    #[test]
+    fn op_mtmsr_mtmsrd() {
+        let (c, _) = run1(x(31, 3, 0, 0, 146, 0), |c, _| c.gpr[3] = MSR_HV | 0x30);
+        assert_eq!(c.msr, MSR_HV | 0x30);
+        let (c, _) = run1(x(31, 3, 0, 0, 178, 0), |c, _| {
+            c.gpr[3] = u64::MAX;
+            c.msr = MSR_HV;
+        });
+        assert_eq!(c.msr, u64::MAX);
+        // L=1 (bit 16 of the word) only takes EE and RI
+        let (c, _) = run1(x(31, 3, 1, 0, 178, 0), |c, _| {
+            c.gpr[3] = u64::MAX;
+            c.msr = MSR_HV;
+        });
+        assert_eq!(c.msr, MSR_HV | 0x8002);
+    }
+
+    #[test]
+    fn op_slbmte_and_back() {
+        // slbmte r3(RS), r4(RB) ; slbmfee r5, r4 ; slbmfev r6, r4
+        let (mut c, mut b) = setup(&[x(31, 3, 0, 4, 402, 0), x(31, 5, 0, 4, 915, 0), x(31, 6, 0, 4, 851, 0)]);
+        c.gpr[3] = 0x1310;
+        c.gpr[4] = 0x1800_0001;
+        steps(&mut c, &mut b, 3);
+        assert_eq!((c.gpr[5], c.gpr[6]), (0x1800_0001, 0x1310));
     }
 }
