@@ -1,8 +1,9 @@
-use std::collections::VecDeque;
 use xenon_cpu::cpu::Cpu;
 use xenon_cpu::dev::flash::FlashWindow;
 use xenon_cpu::dev::soc::SocRegs;
-use xenon_cpu::map::{initial_regs, CB_A_LOAD, CB_NEXT_FLASH_OFFSET, FLASH_BASE, FLASH_SIZE, SOC_BASE, SOC_SIZE, SRAM_BASE, SRAM_SIZE};
+use xenon_cpu::hooks::{Action, Hooks};
+use xenon_cpu::runner::{run_until, StageEnd};
+use xenon_cpu::map::{CB_A_DIGEST_HOOK, SRAM_ALIAS, initial_regs, CB_A_LOAD, CB_NEXT_FLASH_OFFSET, FLASH_BASE, FLASH_SIZE, SOC_BASE, SOC_SIZE, SRAM_BASE, SRAM_SIZE};
 use xenon_cpu::mem::Bus;
 
 const MAX_STEPS: u64 = 5_000_000;
@@ -17,7 +18,6 @@ fn main() {
     let next = CB_NEXT_FLASH_OFFSET as usize;
     let next_entry = u32::from_be_bytes(flash[next + 8..next + 12].try_into().unwrap()) as u64;
     let handoff_pc = 0x0200_0000 + (next_entry & 0xFFFF);
-    let mut hash_ok = true;
 
     let mut bus = Bus::new();
     bus.map_ram(SRAM_BASE, SRAM_SIZE);
@@ -28,45 +28,19 @@ fn main() {
     let mut cpu = Cpu::new(CB_A_LOAD + entry);
     initial_regs(&mut cpu);
 
-    let mut trace = VecDeque::new();
-    let mut steps = 0u64;
-    let stop = loop {
-        if steps == MAX_STEPS {
-            break None;
-        }
-        let pc = cpu.pc;
-        // Scope decision "no glitch": the RGH3 CB_B does not match the digest stored in CB_A (the real
-        // console glitches this compare), so force the compare result at the relocated 0x7F0 to "equal".
-        if pc == CB_A_LOAD + 0xC000 + 0x7F0 {
-            eprintln!("hle: forcing CB_B digest compare to pass (r3 was {:#x})", cpu.gpr[3]);
-            hash_ok = cpu.gpr[3] == 0;
-            cpu.gpr[3] = 0;
-        }
-        if pc == handoff_pc {
-            println!("HANDOFF pc={pc:#x} hash_ok={hash_ok}");
-            break None;
-        }
-        let word = bus.read(pc, 4).unwrap_or(0);
-        if trace.len() == 32 {
-            trace.pop_front();
-        }
-        trace.push_back((pc, word));
-        if let Err(s) = cpu.step(&mut bus) {
-            break Some(s);
-        }
-        steps += 1;
-    };
+    bus.map_alias(SRAM_ALIAS, SRAM_SIZE as u64, SRAM_BASE);
+    let mut hooks = Hooks::new();
+    // Scope decision "no glitch": the RGH3 CB_B does not match the digest stored in CB_A (the real
+    // console glitches this compare), so force the compare result to "equal".
+    hooks.add(CB_A_DIGEST_HOOK, Action::SetGpr { reg: 3, val: 0 });
 
-    println!("last {} instructions:", trace.len());
-    for (pc, w) in &trace {
-        println!("  {pc:016x}: {w:08x}");
+    let (end, steps) = run_until(&mut cpu, &mut bus, &hooks, handoff_pc, MAX_STEPS);
+    let hash_ok = hooks.overrides().is_empty();
+    match &end {
+        StageEnd::Handoff { pc } => println!("HANDOFF pc={pc:#x} hash_ok={hash_ok}"),
+        e => println!("end: {e:?}"),
     }
     println!("steps: {steps}");
-    match stop {
-        Some(s) => println!("stop: {s:?}"),
-        None if steps == MAX_STEPS => println!("stop: step budget exhausted"),
-        None => println!("stop: handoff"),
-    }
     for spec in args {
         let (a, n) = spec.split_once(':').expect("--dump addr:len (hex)");
         let (a, n) = (u64::from_str_radix(a, 16).unwrap(), usize::from_str_radix(n, 16).unwrap());

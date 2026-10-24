@@ -10,6 +10,10 @@ pub const FLASH_BASE: u64 = 0x8000_0200_C800_0000;
 pub const FLASH_SIZE: u64 = 0x800_0000;
 /// Flash offset of the stage CB_A loads next (CB_B, 0x9EF0 in this image); the 1BL passes it in r31.
 pub const CB_NEXT_FLASH_OFFSET: u64 = 0x9EF0;
+/// 32-bit real-mode alias of the SRAM: CB_A jumps to `0x0200_0000 + (entry & 0xFFFF)` (code at 0x4A8..0x4B0).
+pub const SRAM_ALIAS: u64 = 0x0200_0000;
+/// Relocated address of the CB_A digest compare result (r3), forced to "equal" (no glitch).
+pub const CB_A_DIGEST_HOOK: u64 = CB_A_LOAD + 0xC000 + 0x7F0;
 pub const SOC_BASE: u64 = 0x8000_0200_0006_0000;
 pub const SOC_SIZE: u64 = 0x1_0000;
 

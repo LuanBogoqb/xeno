@@ -22,6 +22,8 @@ struct Region {
 #[derive(Default)]
 pub struct Bus {
     regions: Vec<Region>,
+    /// (base, size, target): addresses in `base..base+size` are redirected to `target + (addr - base)`.
+    aliases: Vec<(u64, u64, u64)>,
 }
 
 impl Bus {
@@ -42,6 +44,18 @@ impl Bus {
         self.insert(Region { base, size, kind: Kind::Dev(dev) });
     }
 
+    /// Real-mode alias, e.g. CB_A jumps to 32-bit 0x0200_xxxx while the SRAM sits at 0x8000_0200_0000_0000.
+    pub fn map_alias(&mut self, base: u64, size: u64, target: u64) {
+        self.aliases.push((base, size, target));
+    }
+
+    fn xlate(&self, addr: u64) -> u64 {
+        match self.aliases.iter().find(|(b, s, _)| addr >= *b && addr - *b < *s) {
+            Some((b, _, t)) => t + (addr - b),
+            None => addr,
+        }
+    }
+
     fn find(&mut self, addr: u64, size: usize, write: bool) -> Result<&mut Region, BusError> {
         let err = BusError::Unmapped { addr, size, write };
         let i = self.regions.partition_point(|r| r.base <= addr);
@@ -59,6 +73,7 @@ impl Bus {
     }
 
     pub fn read(&mut self, addr: u64, size: usize) -> Result<u64, BusError> {
+        let addr = self.xlate(addr);
         let r = self.find(addr, size, false)?;
         let off = addr - r.base;
         match &mut r.kind {
@@ -70,6 +85,7 @@ impl Bus {
     }
 
     pub fn write(&mut self, addr: u64, size: usize, val: u64) -> Result<(), BusError> {
+        let addr = self.xlate(addr);
         let r = self.find(addr, size, true)?;
         let off = addr - r.base;
         match &mut r.kind {
@@ -137,5 +153,15 @@ mod tests {
         b.map_ram(0, 0x1000);
         assert!(b.read(u64::MAX - 1, 4).is_err());
         assert!(b.write(u64::MAX - 1, 4, 0).is_err());
+    }
+
+    #[test]
+    fn alias_redirects_to_target() {
+        let mut b = Bus::new();
+        b.map_ram(0x8000_0200_0000_0000, 0x100);
+        b.map_alias(0x0200_0000, 0x100, 0x8000_0200_0000_0000);
+        b.write(0x8000_0200_0000_0010, 4, 0xDEADBEEF).unwrap();
+        assert_eq!(b.read(0x0200_0010, 4).unwrap(), 0xDEADBEEF);
+        assert!(b.read(0x0200_0100, 4).is_err());
     }
 }

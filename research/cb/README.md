@@ -180,3 +180,7 @@ Resolvido: o digest é RotSumSha (função `0x950`): acumula 4×u64 com soma/rot
 Resultado: `HANDOFF pc=0x20003d0 hash_ok=false` após ~2,03 M instruções. A rotina `0x4A8` zera os GPRs, passa `r31 = 0x11A30` (offset do CD, próximo estágio) e salta para `0x0200_0000 + (entry & 0xFFFF)`. Esse endereço de fetch ainda não está mapeado (a SRAM aparece em `0x8000_0200_…`); o alias real-mode fica para o plano do CB_B.
 
 Critério de saída atingido (PC no entry do CB_B), com o hash forçado.
+
+## Alvo real do handoff (M1b, Task 1)
+
+Desmontagem do CB_A em `0x4A8..0x4B0`: `clrlwi r3,r3,16; addis r3,r3,0x200; mtlr r3`. `clrlwi` zera os 32 bits altos, então o alvo é o endereço de **32 bits** `0x0200_0000 + (entry & 0xFFFF)`, não `0x8000_0200_…`. Regra adotada: alias no `Bus` (`map_alias(0x0200_0000, SRAM_SIZE, SRAM_BASE)`), de modo que `0x0200_03D0` lê `SRAM_BASE + 0x3D0`, onde o CB_A deixa o corpo do CB_B (a rotina `0x4A8` zera os GPRs e `r31 = 0x11A30`). Não há prova de hardware dessa equivalência; é a que faz o corpo decifrado ficar executável.
