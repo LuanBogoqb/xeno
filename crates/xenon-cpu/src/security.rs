@@ -3,6 +3,7 @@ use aes::Aes128;
 use cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
 use cipher::generic_array::GenericArray;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 const UINT36_MASK: u128 = (1u128 << 36) - 1;
 const UINT128_MASK: u128 = u128::MAX;
@@ -25,22 +26,18 @@ fn generate_gf2_table(iv: u16, poly: u16) -> [u16; 256] {
     tab
 }
 
-static mut GF2_TAB_INIT: bool = false;
-static mut GF2_TAB: [u16; 256] = [0u16; 256];
+/// Shared by every engine and built once. `OnceLock` replaces the previous
+/// `static mut` + flag pair: the table is plain data, so one initialiser race
+/// would have written the same bytes, but the flag itself was a data race.
+static GF2_TAB: OnceLock<[u16; 256]> = OnceLock::new();
 
 fn gf2_tab() -> &'static [u16; 256] {
-    unsafe {
-        if !GF2_TAB_INIT {
-            GF2_TAB = generate_gf2_table(0, 0x87);
-            GF2_TAB_INIT = true;
-        }
-        &GF2_TAB
-    }
+    GF2_TAB.get_or_init(|| generate_gf2_table(0, 0x87))
 }
 
 fn get_tweak_0(white_key: &[u8; 16], address: u64) -> [u8; 16] {
     let key = u128::from_be_bytes(*white_key);
-    let addr = (address >> 4) as u64;
+    let addr = address >> 4;
     let mut n: u128 = key.wrapping_shl(36);
     let mut of: u64 = (key >> 92) as u64;
     let mut bitlen = 0usize;
@@ -81,6 +78,10 @@ pub struct SecurityEngine {
     white_key: [u8; 16],
     aes_key: [u8; 16],
     hash_key: [u8; 16],
+    /// Key schedules built once per engine. Rebuilding `Aes128` inside
+    /// `xex_*_block` repeated the key expansion on every 16-byte block.
+    aes: Aes128,
+    hash_aes: Aes128,
 }
 
 impl Default for SecurityEngine {
@@ -91,26 +92,24 @@ impl Default for SecurityEngine {
 
 impl SecurityEngine {
     pub fn new(master_key: u64) -> Self {
+        Self::with_keys(master_key, [0x55; 16], [0x55; 16], [0x55; 16])
+    }
+
+    pub fn with_keys(master_key: u64, white_key: [u8; 16], aes_key: [u8; 16], hash_key: [u8; 16]) -> Self {
         let mut s = Self {
             master_key,
             slots: [KeySlot { id: 0, value: 0, locked: false }; 8],
             tags: HashMap::new(),
             enabled: false,
-            white_key: [0x55; 16],
-            aes_key: [0x55; 16],
-            hash_key: [0x55; 16],
+            white_key,
+            aes_key,
+            hash_key,
+            aes: Aes128::new(aes_key.as_slice().into()),
+            hash_aes: Aes128::new(hash_key.as_slice().into()),
         };
         for (i, slot) in s.slots.iter_mut().enumerate() {
             slot.id = i as u8;
         }
-        s
-    }
-
-    pub fn with_keys(master_key: u64, white_key: [u8; 16], aes_key: [u8; 16], hash_key: [u8; 16]) -> Self {
-        let mut s = Self::new(master_key);
-        s.white_key = white_key;
-        s.aes_key = aes_key;
-        s.hash_key = hash_key;
         s
     }
 
@@ -134,6 +133,7 @@ impl SecurityEngine {
     pub fn aes_key(&self) -> &[u8; 16] { &self.aes_key }
     pub fn hash_key(&self) -> &[u8; 16] { &self.hash_key }
 
+    #[allow(dead_code)]
     fn region_key(&self, region: u8) -> u64 {
         self.slots.get(region as usize).map(|s| s.value ^ self.master_key).unwrap_or(self.master_key)
     }
@@ -141,18 +141,16 @@ impl SecurityEngine {
     pub fn xex_encrypt_block(&self, plaintext: &[u8; 16], address: u64) -> [u8; 16] {
         let t = get_tweak_0(&self.white_key, address);
         let x: [u8; 16] = core::array::from_fn(|i| plaintext[i] ^ t[i]);
-        let cipher = Aes128::new(self.aes_key.as_slice().into());
         let mut block = GenericArray::from(x);
-        cipher.decrypt_block(&mut block);
+        self.aes.decrypt_block(&mut block);
         core::array::from_fn(|i| block[i] ^ t[i])
     }
 
     pub fn xex_decrypt_block(&self, ciphertext: &[u8; 16], address: u64) -> [u8; 16] {
         let t = get_tweak_0(&self.white_key, address);
         let x: [u8; 16] = core::array::from_fn(|i| ciphertext[i] ^ t[i]);
-        let cipher = Aes128::new(self.aes_key.as_slice().into());
         let mut block = GenericArray::from(x);
-        cipher.encrypt_block(&mut block);
+        self.aes.encrypt_block(&mut block);
         core::array::from_fn(|i| block[i] ^ t[i])
     }
 
@@ -199,10 +197,6 @@ impl SecurityEngine {
         // previous XOR/FNV placeholder with a real block-cipher MAC. Still a
         // model: the exact Xenon integrity tag (algorithm, IV, padding) is not
         // validated against hardware and remains unverified.
-        use aes::Aes128;
-        use cipher::{BlockEncrypt, KeyInit};
-        use cipher::generic_array::GenericArray;
-        let cipher = Aes128::new(self.hash_key.as_slice().into());
         let mut msg = Vec::with_capacity(8 + data.len() + 16);
         msg.extend_from_slice(&addr.to_be_bytes());
         msg.extend_from_slice(data);
@@ -216,7 +210,7 @@ impl SecurityEngine {
                 iv[i] ^= chunk[i];
             }
             let mut block = GenericArray::from(iv);
-            cipher.encrypt_block(&mut block);
+            self.hash_aes.encrypt_block(&mut block);
             iv = block.into();
         }
         u64::from_be_bytes(iv[..8].try_into().unwrap())
@@ -301,6 +295,15 @@ mod tests {
         bad[0] ^= 1;
         assert!(!e.verify_tag(0x1000, &bad));
     }
+    #[test]
+    fn cloned_engine_keeps_the_key_schedule() {
+        let e = SecurityEngine::with_keys(0, [0x11; 16], [0x22; 16], [0x33; 16]);
+        let c = e.clone();
+        let ct = [0x5Au8; 16];
+        assert_eq!(e.xex_decrypt_block(&ct, 0x3B80), c.xex_decrypt_block(&ct, 0x3B80));
+        assert_eq!(e.tag_page(0x1000, &ct), c.tag_page(0x1000, &ct));
+    }
+
     #[test]
     #[ignore]
     fn captured_pair_decryption_with_all_55() {
