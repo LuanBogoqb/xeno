@@ -11,7 +11,6 @@ detalhes, o disassembly e os experimentos que sustentam cada conclusão.
 | [`hv/`](hv/README.md) | hypervisor: syscalls, SMC, MMU, captura de memória e o security engine (`security_engine_research.md`) |
 | [`hv/analysis/`](hv/analysis/) | saída das ferramentas: disassembly, tabela de funções, rotina do security engine |
 | [`proto/`](proto/README.md) | plugin Proto: imports, HUD, rede, requisitos para o emulador |
-| [`goldspoof/`](goldspoof/README.md) | plugin GoldSpoof17559: patches de kernel e o que cada um faz |
 
 ## Convenções
 

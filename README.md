@@ -26,7 +26,7 @@ NAND do próprio usuário, em `dumps/` (fora do git).
 | M3 | `xboxkrnl` real + SMC completo | |
 | M4 | Southbridge: SATA/XTAF, USB HID, ethernet | |
 | M5 | GPU Xenos | |
-| M6 | `xam` + dash + plugins (Proto, GoldSpoof) | |
+| M6 | `xam` + dash + plugins (Proto) | |
 | M7 | Live em bridge, XOSC válido | |
 
 M2 segue aberto, mas o núcleo já roda: **271.049.701 instruções** até o handoff

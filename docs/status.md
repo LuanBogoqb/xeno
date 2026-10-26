@@ -11,7 +11,7 @@ registradores/memória são comparados. Um marco só fecha quando isso bate.
 | M3 | `xboxkrnl` real + SMC completo | | |
 | M4 | Southbridge: SATA/XTAF, USB HID, ethernet | | |
 | M5 | GPU Xenos (command processor do Xenia como referência) | | |
-| M6 | `xam` + dash; carregar Proto e GoldSpoof | | [`research/proto/`](../research/proto/README.md), [`research/goldspoof/`](../research/goldspoof/README.md) |
+| M6 | `xam` + dash; carregar Proto | | [`research/proto/`](../research/proto/README.md) |
 | M7 | Live em bridge; resposta XOSC válida | | [`research/hv/security_engine_research.md`](../research/hv/security_engine_research.md) |
 
 ## M1 — fechado

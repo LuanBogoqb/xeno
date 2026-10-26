@@ -30,4 +30,6 @@ Plugin de HUD/rede da comunidade. Roda como plugin de kernel no RGH.
 
 ## Requisitos para o emulador
 
-Mesmos do GoldSpoof, mais: pilha de rede (`NetDll_*`), `XNotify`/XUI do `xam` real e um loader de plugins tipo DashLaunch. Teste de aceitação: o HUD do Proto aparece sobre a dash emulada.
+Pilha de rede (`NetDll_*`), `XNotify`/XUI do `xam` real e o loader de plugins do
+emulador (`[Plugins]` do `launch.ini`, ver [plugins.md](../../docs/plugins.md)).
+Teste de aceitação: o HUD do Proto aparece sobre a dash emulada.

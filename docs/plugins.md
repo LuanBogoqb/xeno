@@ -13,8 +13,7 @@ plugin.
 
 ```ini
 [Plugins]
-plugin1 = Hdd:\Plugins\GoldSpoof17559.xex
-plugin2 = Hdd:\Plugins\Proto.xex
+plugin1 = Hdd:\Plugins\Proto.xex
 ```
 
 Regras, iguais às do console:
@@ -47,14 +46,14 @@ cargo run --release -p xenon-cpu --bin runcb -- dumps/stages/CB_A.mem dumps/FLAS
 cargo run --release -p xenon-cpu --bin runcb -- ... --stage hv --launch-ini dumps/hdd/launch.ini
 
 # plugin avulso, ocupa o primeiro slot livre; pode repetir
-cargo run --release -p xenon-cpu --bin runcb -- ... --stage hv --plugin dumps/Plugins/GoldSpoof17559.xex
+cargo run --release -p xenon-cpu --bin runcb -- ... --stage hv --plugin dumps/Plugins/Proto.xex
 ```
 
 O log, depois do handoff para o kernel:
 
 ```
 Plugins: 1 from dumps/hdd/launch.ini
-  plugin1  dumps/hdd/Plugins/GoldSpoof17559.xex  XEX2 encryption=1 compression=LZX entry=0x911023c0 base=0x91100000 imports=[xboxkrnl.exe]
+  plugin1  dumps/hdd/Plugins/Proto.xex  XEX2 encryption=1 compression=LZX entry=0x91883800 base=0x91850000 imports=[xboxkrnl.exe xam.xex]
 Plugin loader: M6; the list and the headers are read, the images are not mapped or executed
 ```
 

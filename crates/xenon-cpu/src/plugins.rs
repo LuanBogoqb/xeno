@@ -315,15 +315,12 @@ mod tests {
     #[test]
     fn reads_plugin_slots_in_order() {
         let list = ini(
-            "[Plugins]\nplugin2 = Hdd:\\Plugins\\Proto.xex\nplugin1=Hdd:\\Plugins\\GoldSpoof.xex\n",
+            "[Plugins]\nplugin2 = Hdd:\\Plugins\\Proto.xex\nplugin1=Hdd:\\Plugins\\A.xex\n",
         );
         assert_eq!(list.specs.len(), 2);
         assert_eq!(list.specs[0].slot, 1);
         assert_eq!(list.specs[1].slot, 2);
-        assert_eq!(
-            list.specs[0].path,
-            Path::new("dumps/hdd/Plugins/GoldSpoof.xex")
-        );
+        assert_eq!(list.specs[0].path, Path::new("dumps/hdd/Plugins/A.xex"));
     }
 
     #[test]
@@ -445,8 +442,8 @@ mod tests {
     fn report_lists_slots_and_headers() {
         let dir = std::env::temp_dir().join(format!("xenon-plugins-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let xex = dir.join("GoldSpoof.xex");
-        std::fs::write(&xex, synthetic_xex(0x9110_23c0, 0x9110_0000, 1, 2)).unwrap();
+        let xex = dir.join("Proto.xex");
+        std::fs::write(&xex, synthetic_xex(0x9188_3800, 0x9185_0000, 1, 2)).unwrap();
         let mut list = PluginList::default();
         list.push_path(xex.to_str().unwrap(), Path::new("."), Path::new("dumps"));
         let lines = report(&list);
@@ -454,7 +451,7 @@ mod tests {
         assert_eq!(lines[0], "Plugins: 1 from the command line");
         assert!(lines[1].contains("plugin1"));
         assert!(lines[1].contains("encryption=1 compression=LZX"));
-        assert!(lines[1].contains("entry=0x911023c0"));
+        assert!(lines[1].contains("entry=0x91883800"));
         assert!(lines[2].starts_with("Plugin loader: M6"));
         std::fs::remove_dir_all(&dir).ok();
     }

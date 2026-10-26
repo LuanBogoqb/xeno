@@ -9,7 +9,7 @@ tem um assunto e linka as notas profundas em `research/`.
 | [status.md](status.md) | marcos M0–M7, o que está validado e o que falta | visão geral |
 | [getting-started.md](getting-started.md) | compilar, rodar, testar, onde ficam os dumps | quem acabou de clonar |
 | [capturing-from-console.md](capturing-from-console.md) | como extrair dados do console (plugin de kernel, launch.ini, FTP) | quem tem o hardware |
-| [plugins.md](plugins.md) | como o emulador carrega plugin de kernel, do jeito do Dashlaunch | quem quer carregar Proto, GoldSpoof ou um plugin próprio |
+| [plugins.md](plugins.md) | como o emulador carrega plugin de kernel, do jeito do Dashlaunch | quem quer carregar Proto ou um plugin próprio |
 | [security-engine.md](security-engine.md) | a cifra de memória: algoritmo, chaves por boot e validação em hardware | quem for mexer em `security.rs` |
 | [tools.md](tools.md) | cada script/binário de `tools/` e para que serve | uso diário |
 | [decisions.md](decisions.md) | decisões de escopo (LLE, sem glitch, Live, nada da MS no repo) | antes de propor mudanças grandes |

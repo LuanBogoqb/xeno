@@ -7,11 +7,11 @@ redistribuído neste repositório.
 
 | Projeto | O que é | Como entra aqui |
 |---|---|---|
-| Proto | Plugin de HUD e rede da comunidade, com autenticação no Live nativo | Carregado como plugin de kernel; é o caminho para o Live. O binário não é distribuído aqui — vem do usuário |
-| GoldSpoof17559 | Plugin que ajusta as checagens de Gold no `xam` do kernel 17559 | Carregado como plugin de kernel. O binário não é distribuído aqui |
+| [Proto](https://www.freestealth.com/) | Plugin de HUD e rede, com autenticação no Live nativo | Carregado como plugin de kernel; é o caminho para o Live. O binário não é distribuído aqui — vem do usuário |
 
-A autoria dos dois é da comunidade que os mantém; o README de cada alvo em
-`research/` registra o que foi analisado e os hashes dos binários usados.
+O Proto é distribuído pela comunidade em [freestealth.com](https://www.freestealth.com/).
+O README do alvo em `research/proto/` registra o que foi analisado e o hash do
+binário usado.
 
 ## Emuladores e referência técnica
 
