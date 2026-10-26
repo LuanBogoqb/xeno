@@ -14,6 +14,8 @@ python -m pip install cryptography capstone
 |---|---|---|
 | `bootchain.py` | `bootchain.py <flash.bin> <outdir>` | decifra CB_A/CB_B/CD/CE e CF/CG, reconstrói `kernel_base.bin` e `kernel_17559.bin`, confere os hashes |
 | `flashinfo.py` | `flashinfo.py <flash.bin> <cpu_key> [1bl_key]` | explorador: lista os estágios e testa chaves dadas, mostrando qual decifra melhor |
+| `smcextract.py` | `smcextract.py <flash.bin> <outdir>` | decifra o firmware do SMC (header em `0x78`) em `SMC_en.bin`, `SMC_dec.bin` e `manifest.json` |
+| `test_smcextract.py` | `python -m unittest discover -s tools -p 'test_smcextract.py'` | teste do decifrador e dos limites do header do SMC |
 
 Detalhes de offsets/chaves por estágio: [`research/flash/README.md`](../research/flash/README.md).
 
@@ -34,9 +36,17 @@ Detalhes de offsets/chaves por estágio: [`research/flash/README.md`](../researc
 | `test_cbscan.py` | `python tools/test_cbscan.py` | teste do classificador de opcodes desconhecidos |
 | `parse_seccap.py` | `parse_seccap.py [capture.bin]` | lê a captura do plugin, compara com a imagem retail e mostra os marcos do HV |
 
-## Captura (console, XDK)
+## Captura (console)
 
-Fonte e formatos em [`tools/capture/`](../tools/capture/) e no guia
+Dois caminhos: os binários XDK em [`tools/capture/`](../tools/capture/) (plugin
+de kernel e homebrews) e os coletores em Rust, que não precisam do XDK:
+
+| Ferramenta | Uso | O que faz |
+|---|---|---|
+| `console-capture/` | `./tools/console-capture/build.ps1` | copia as imagens dos módulos carregados (`.mem`, `.ldr`, `.pages`), relatório e respostas SMC para `CAPnn` |
+| `smc-capture/` | `./tools/smc-capture/build.ps1` | consulta a versão do SMC (`0x12`) três vezes e grava `SMC-nn.TXT` |
+
+Formatos, limites e o passo a passo no console em
 [capturing-from-console.md](capturing-from-console.md).
 
 ```powershell

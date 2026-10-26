@@ -2,8 +2,8 @@
 
 Como os dados que o emulador usa saem do console. Duas classes:
 
-1. **Dumps estáticos**: flash/eMMC, keyvault, fuses e CPU key. Saem por XeLL e
-   estão descritos em [`research/flash/README.md`](../research/flash/README.md).
+1. **Dumps estáticos**: flash/eMMC, keyvault, fuses, CPU key e o firmware do SMC.
+   Saem por XeLL e estão descritos em [`research/flash/README.md`](../research/flash/README.md).
 2. **Capturas de runtime**: RAM do hypervisor, registradores do security engine
    e pares plaintext/ciphertext. Precisam de um plugin em kernel mode — é o que
    este documento cobre.
@@ -100,6 +100,30 @@ area do SE, tabela de chaves).
 
 Isso permitiu a validação em hardware descrita em
 [security-engine.md](security-engine.md).
+
+## Coletor de módulos (`tools/console-capture/`)
+
+Homebrew que roda como título e copia as imagens já carregadas — `xboxkrnl`,
+`xam`, `launch` e `proto` — para uma pasta `CAPnn` ao lado do XEX, com o
+registro do loader (`.ldr`) e o mapa de páginas (`.pages`). O `report.txt` traz
+as versões do kernel, as estatísticas de memória e 15 respostas SMC; o
+`manifest.json` traz tamanho e SHA-256 de cada arquivo.
+
+O resultado deste console está em `dumps/console/CAP00/`; as imagens e o mapa
+são a referência de M2/M3 e do loader de plugins. Não é snapshot atômico: o
+console continua executando durante a cópia, páginas puladas ficam zeradas no
+`.mem` e marcadas no `.pages`, e o coletor não lê RAM física nem MMIO.
+
+## SMC
+
+O firmware do SMC sai da flash em `0x800` (14.336 bytes, versão 2.05) com
+`tools/smcextract.py`; os hashes e o formato estão em
+[`research/flash/README.md`](../research/flash/README.md).
+
+A resposta viva do comando `0x12` (`12 62 02 05…`) está em
+`dumps/smc/SMC-00.TXT` e bate com a versão do firmware. O coletor de módulos
+consulta também `0x07`, `0x0A`, `0x0F` e `0x17`, três vezes cada, e grava o
+retorno bruto no `report.txt`.
 
 ## Segurança e ética
 

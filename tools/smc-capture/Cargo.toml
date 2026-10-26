@@ -1,0 +1,17 @@
+[package]
+name = "smc-capture"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[target.'cfg(target_os = "xbox360")'.dependencies]
+xbox360-sys = "=0.2.0"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+debug = true
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("xbox360"))'] }
