@@ -12,7 +12,7 @@ executado pelo interpretador. Não há glitch: a verificação de assinatura do 
 |---|---|
 | `cpu/` | interpretador PPC (estado, `step`, SPRs, exceções, syscalls); testes em `cpu/tests.rs` |
 | `alu.rs` | helpers de 32/64 bits usados pelo interpretador |
-| `mem/` | barramento, RAM/SRAM/flash, tradução (SDR1), page walker; testes em `mem/tests.rs` |
+| `mem/` | `bus` (regiões, aliases, RAM/SRAM/flash), `tlb`, `walk` (SDR1), `cipher` (regiões 1/3), `shared` (reservas/IIC); testes em `mem/tests.rs` |
 | `mmu.rs` | SLB/TLB por PPE, HID6 (`0x3F9`), `DLP`/`LB`, PP0 e NX |
 | `map.rs` | mapa de memória e estado que o 1BL deixa para o CB_A (chaves públicas, SRAM, fuses) |
 | `runner.rs` | roda um estágio até o handoff, com hooks de PC |

@@ -273,6 +273,52 @@ fn alias_redirects_to_target() {
 }
 
 #[test]
+fn cipher_view_reads_and_writes_whole_physical_blocks() {
+    let mut b = Bus::new();
+    let dram = 0x8000_0000_0000_0000u64;
+    b.map_ram(dram, 0x1000);
+    b.map_security_ram_plaintext(dram, 0x1000);
+    let mut engine = crate::security::SecurityEngine::with_keys(0, [0x11; 16], [0x22; 16], [0x33; 16]);
+    engine.enable();
+    let plaintext: Vec<u8> = (0..0x40).map(|i| i as u8).collect();
+    let ciphertext = engine.xex_encrypt(&plaintext, 0x100);
+    for (i, byte) in ciphertext.iter().enumerate() {
+        b.write(dram + 0x100 + i as u64, 1, *byte as u64).unwrap();
+    }
+    b.security = Some(engine);
+    b.enable_security_cipher();
+
+    // A read crossing from region 1 to region 3 and covering three blocks.
+    assert_eq!(b.read(0x100_0000_0107, 1), Ok(7));
+    assert_eq!(b.read(0x100_0000_011E, 4), Ok(0x1E1F2021));
+    assert_eq!(b.read(0x300_0000_0130, 8), Ok(0x3031323334353637));
+
+    // An unaligned store patches only its four bytes and re-encrypts the blocks.
+    b.write(0x100_0000_010A, 4, 0xAABBCCDD).unwrap();
+    assert_eq!(b.read(0x100_0000_0108, 8), Ok(0x0809AABBCCDD0E0F));
+    assert_eq!(b.read(0x100_0000_0100, 8), Ok(0x0001020304050607));
+    assert_eq!(b.read(0x100_0000_0108, 8), Ok(0x0809AABBCCDD0E0F));
+
+    // The physical view keeps ciphertext: it must differ from the plaintext.
+    let raw: Vec<u8> = (0..0x40)
+        .map(|i| b.read(dram + 0x100 + i, 1).unwrap() as u8)
+        .collect();
+    assert_ne!(raw, plaintext);
+}
+
+#[test]
+fn cipher_view_is_bounded_by_the_security_ram_size() {
+    let mut b = Bus::new();
+    let dram = 0x8000_0000_0000_0000u64;
+    b.map_ram(dram, 0x1000);
+    b.map_security_ram_plaintext(dram, 0x1000);
+    b.enable_security_engine(0);
+    b.enable_security_cipher();
+    assert!(b.read(0x100_0000_0FFF, 2).is_err());
+    assert!(b.write(0x300_0000_1000, 4, 0).is_err());
+}
+
+#[test]
 fn hrmor_offsets_only_addresses_without_bit_63() {
     let mut b = Bus::new();
     b.map_ram(0x8000_017A_0300_0000, 0x100);
