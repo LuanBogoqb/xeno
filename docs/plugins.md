@@ -53,8 +53,8 @@ O log, depois do handoff para o kernel:
 
 ```
 Plugins: 1 from dumps/hdd/launch.ini
-  plugin1  dumps/hdd/Plugins/Proto.xex  XEX2 encryption=1 compression=LZX entry=0x91883800 base=0x91850000 imports=[xboxkrnl.exe xam.xex]
-Plugin loader: M6; the list and the headers are read, the images are not mapped or executed
+  plugin1  dumps/hdd/Plugins/Proto.xex  XEX2 encryption=0 compression=LZX entry=0x91873910 base=0x91850000 image=389120 imports=[xam.xex=190 xboxkrnl.exe=167] (181 slots, 176 thunks)
+Plugin loader: the image is extracted and its imports are classified; mapping into guest RAM and the entry call need the kernel (M6)
 ```
 
 ## O que já funciona
@@ -63,16 +63,45 @@ Plugin loader: M6; the list and the headers are read, the images are not mapped 
 - mapeamento dos drives do console para `dumps/`;
 - leitura do header XEX2: ponto de entrada, base da imagem, endereço de carga,
   tipo de cifra, tipo de compressão e as bibliotecas importadas;
-- relatório no início do estágio de kernel, dizendo o que o boot carregaria.
+- extração da imagem em `crates/xenon-cpu/src/xex/`: AES-128 quando o XEX é
+  cifrado, LZX sempre, sem depender do Python;
+- layout de carga: imagem plana quando o XEX não tem tabela de seções usável (é
+  o caso dos plugins empacotados) e por seção quando tem;
+- classificação dos imports a partir da imagem: slot ordinal (4 bytes) ou thunk
+  de chamada (16 bytes), com o ordinal de cada um;
+- patch no formato do console: o slot recebe o endereço resolvido e o thunk
+  recebe `lis r11, hi; addi r11, r11, lo; mtctr r11; bctr`. O resolvedor é do
+  chamador e recebe `(biblioteca, ordinal, tipo)`, porque o console aponta
+  alguns thunks para um stub diferente da função (64 KiB acima, no Proto);
+- relatório no início do estágio de kernel, já com a imagem extraída e os
+  imports classificados.
+
+O build 2.4.7 que roda no console (`Proto.xex`, não cifrado) serve de prova: a
+imagem extraída bate com `dumps/console/CAP00/proto.mem` em `.pdata` e no stub de
+entrada, e os 357 imports são patcheados byte a byte iguais à captura. O
+`Proto.xex` cifrado de `samples/` também extrai e mapeia as seções.
+
+### A API
+
+```rust
+let x = Xex::parse(bytes)?;
+let image = x.map(&x.extract()?)?;
+let report = x.patch_imports(&mut image, |library, ordinal, kind| {
+    resolve(library, ordinal, kind)
+});
+```
+
+`ImportReport` diz quantos slots e thunks foram resolvidos e lista os pares
+`(biblioteca, ordinal)` que o resolvedor não respondeu.
 
 ## O que falta
 
-O mapeamento e a chamada de entrada são M6, e dependem de duas peças que ainda
-não existem no emulador:
+O que resta do M6 depende do kernel já rodando:
 
-1. extrair a imagem do XEX (AES-128 + LZX) para RAM no endereço de carga;
-2. resolver os imports pelo kernel real, que é o que `xam.xex` exige.
+1. mapear a imagem no `Bus` no endereço de carga, pelas páginas do guest;
+2. resolver os imports pela tabela de exportação real de `xboxkrnl.exe` e
+   `xam.xex` (M3+), com a distinção entre endereço da função e stub de chamada;
+3. chamar a entrada com a semântica de DllMain (contexto de thread, retorno).
 
-Enquanto isso, o relatório já mostra o primeiro bloqueio de cada plugin: as
-bibliotecas importadas. Um plugin que importa `xam.xex` não tem para onde
-resolver hoje, e é isso que o M6 destrava.
+Hoje o resolvedor é do chamador: sem `xam` carregado não existe para onde
+resolver, e o relatório mostra isso.

@@ -19,6 +19,7 @@ executado pelo interpretador. Não há glitch: a verificação de assinatura do 
 | `hooks.rs` | ações por PC ("sem glitch") e logging de registradores |
 | `multicore.rs` | escalonador determinístico de 6 threads (modo opt-in) |
 | `security.rs` | modelo do security engine: AES-128 XEX + tweak Toeplitz |
+| `xex/` | XEX2: header, extração AES+LZX (`lzx`), layout da imagem, imports e thunks |
 | `xosc.rs` | modelo da resposta XOSC (experimental, não é resposta válida de Live) |
 | `dev/` | dispositivos: `flash`, `smc`, `soc`, `fuses`, `iic` |
 | `bin/runcb.rs` | CLI que monta o console e roda um estágio |

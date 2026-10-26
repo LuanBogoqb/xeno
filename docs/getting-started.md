@@ -60,6 +60,9 @@ cargo test -p xenon-cpu --release --test chain -- --ignored   # cadeia real (pre
 # as duas provas do security engine (precisam da captura v25)
 cargo test -p xenon-cpu --test chain hv_dump_key_search -- --ignored
 cargo test -p xenon-cpu --test chain captured_pair_with_real_keys_validates_cipher -- --ignored
+
+# extração do XEX contra as capturas (dumps/console/Proto_console.xex, CAP00 e samples/)
+cargo test -p xenon-cpu --lib xex::tests::real -- --ignored
 ```
 
 O CI (`.github/workflows/ci.yml`) roda build, clippy, testes de unidade e os
