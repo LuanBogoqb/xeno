@@ -40,6 +40,9 @@ cargo run --release -p xenon-cpu --bin runcb -- ... --stage hv --hv-threads 6
 | `--fuses FILE` | usa fuses reais em vez dos embutidos |
 | `--security-engine off\|generic\|real` | modelo do security engine (default: `real` se as chaves capturadas existirem, senão `generic`) |
 | `--security-keys FILE` | arquivo com a tripla `hash`/`white`/`aes` (default `dumps/console/sec_keys_v25.txt`) |
+| `--plugins-dir DIR` | carrega o `DIR/launch.ini` e os plugins de `[Plugins]` |
+| `--launch-ini FILE` | o mesmo, apontando o ini direto |
+| `--plugin FILE` | plugin avulso no primeiro slot livre; pode repetir |
 | `--xosc-test FILE` | compara a resposta XOSC com um arquivo capturado |
 | `--log-pc PC:r,r` | imprime registradores quando o PC bate |
 | `--cd-stop-pc HEX` / `--hv-stop-pc HEX` | para em um PC interno (snapshots de teste) |

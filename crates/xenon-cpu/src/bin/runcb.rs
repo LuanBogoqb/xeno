@@ -2,8 +2,10 @@ use xenon_cpu::cpu::{Cpu, Stop};
 use xenon_cpu::mem::BusError;
 use xenon_cpu::dev::fuses::FuseLines;
 use xenon_cpu::hooks::{Action, Hooks};
+use xenon_cpu::plugins::PluginList;
 use xenon_cpu::runner::{run_until, StageEnd};
 use xenon_cpu::map::{build_bus, CACHE_WINDOW2_EA, CD_FLASH_OFFSET, CB_B_VM_LOOP, CB_B_VM_OK_EXIT, initial_regs, CB_A_DIGEST_HOOK, CB_A_LOAD, CB_NEXT_FLASH_OFFSET};
+use std::path::{Path, PathBuf};
 
 fn parse_security_keys(text: &str) -> Option<([u8; 16], [u8; 16], [u8; 16])> {
     let mut white: Option<[u8; 16]> = None;
@@ -36,7 +38,7 @@ fn fmt_end(e: &StageEnd) -> String {
 }
 
 fn main() {
-    let usage = "usage: runcb <CB_A.mem> <FLASH.bin> [--stage cb_a|cb_b|cd|hv] [--max-steps N] [--hv-max-steps N] [--hv-threads 1|6] [--fuses FUSE.bin] [--security-engine off|generic|real] [--security-keys FILE] [--xosc-test FILE] [--log-pc PC:r,r] [--cd-stop-pc HEX] [--hv-stop-pc HEX] [addr:len ...]";
+    let usage = "usage: runcb <CB_A.mem> <FLASH.bin> [--stage cb_a|cb_b|cd|hv] [--max-steps N] [--hv-max-steps N] [--hv-threads 1|6] [--fuses FUSE.bin] [--security-engine off|generic|real] [--security-keys FILE] [--launch-ini FILE] [--plugins-dir DIR] [--plugin FILE] [--xosc-test FILE] [--log-pc PC:r,r] [--cd-stop-pc HEX] [--hv-stop-pc HEX] [addr:len ...]";
     let mut all_args: Vec<String> = std::env::args().skip(1).collect();
     let path = all_args.first().cloned().expect(usage);
     let flash_path = all_args.get(1).cloned().expect(usage);
@@ -53,6 +55,9 @@ fn main() {
     let mut security_mode = "auto".to_string();
     let mut security_keys: Option<String> = None;
     let mut xosc_test: Option<String> = None;
+    let mut launch_ini: Option<String> = None;
+    let mut plugins_dir: Option<String> = None;
+    let mut plugin_paths: Vec<String> = Vec::new();
     let mut i = 0;
     while i < rest.len() {
         let a = rest[i].clone();
@@ -78,6 +83,9 @@ fn main() {
                 }
             }
             "--security-keys" => { security_keys = Some(rest[i+1].clone()); i += 1; }
+            "--launch-ini" => { launch_ini = Some(rest[i+1].clone()); i += 1; }
+            "--plugins-dir" => { plugins_dir = Some(rest[i+1].clone()); i += 1; }
+            "--plugin" => { plugin_paths.push(rest[i+1].clone()); i += 1; }
             "--xosc-test" => { xosc_test = Some(rest[i+1].clone()); i += 1; }
             "--max-steps" => { max_steps = rest[i+1].parse().expect("--max-steps N"); i += 1; }
             _ => dumps.push(a),
@@ -112,6 +120,27 @@ fn main() {
             }
         }
     };
+    // Dashlaunch-style plugin list: the [Plugins] section of launch.ini plus any
+    // --plugin given on the command line. Console drives resolve under dumps/.
+    let drive_root = Path::new("dumps");
+    let mut plugins = PluginList::default();
+    let ini_path = launch_ini
+        .clone()
+        .or_else(|| plugins_dir.as_ref().map(|d| format!("{d}/launch.ini")));
+    if let Some(p) = &ini_path {
+        match std::fs::read_to_string(p) {
+            Ok(text) => {
+                let file = PathBuf::from(p);
+                let dir = file.parent().unwrap_or_else(|| Path::new("."));
+                plugins = PluginList::from_launch_ini(&text, dir, drive_root);
+                plugins.source = Some(file);
+            }
+            Err(e) => println!("plugins: cannot read {p}: {e}"),
+        }
+    }
+    for p in &plugin_paths {
+        plugins.push_path(p, Path::new("."), drive_root);
+    }
     let image = std::fs::read(&path).expect("read CB_A");
     let entry = u32::from_be_bytes(image[8..12].try_into().unwrap()) as u64;
 
@@ -167,6 +196,9 @@ CD steps: {s3}", fmt_end(&e3));
         (end, steps) = (e3, steps + s3);
     }
     if depth >= 3 && matches!(end, StageEnd::Handoff { .. }) {
+        for line in xenon_cpu::plugins::report(&plugins) {
+            println!("{line}");
+        }
         match security_mode.as_str() {
             "off" => {
                 println!("HV model: {hv_threads} thread(s), security engine disabled (plaintext-backed, no integrity/encryption)");
