@@ -45,7 +45,7 @@ jobs:
         run: cargo test --workspace --tests
 
       - name: Chain tests (skip without dumps)
-        run: cargo test -p xenon-cpu --test chain -- --ignored
+        run: cargo test -p xenon-cpu --test chain -- --ignored --nocapture
 
   python:
     name: Python tools (syntax + imports)
