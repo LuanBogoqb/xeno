@@ -40,6 +40,8 @@ pub struct Bus {
     pub(crate) reset: [bool; 6],
     pub(crate) iic: crate::dev::iic::Iic,
     pub(crate) security: Option<crate::security::SecurityEngine>,
+    /// When true, regions 1/3 are decrypted/encrypted on the fly with the security engine.
+    pub security_cipher: bool,
     /// Hypervisor real-mode offset (SPR 0x139): addresses with bit 63 clear are ORed with it.
     pub hrmor: u64,
     pub lpcr: u64,
@@ -130,6 +132,12 @@ impl Bus {
         e.enable();
         self.security = Some(e);
     }
+    pub fn enable_security_engine_with_keys(&mut self, master_key: u64, white_key: [u8; 16], aes_key: [u8; 16], hash_key: [u8; 16]) {
+        let mut e = crate::security::SecurityEngine::with_keys(master_key, white_key, aes_key, hash_key);
+        e.enable();
+        self.security = Some(e);
+    }
+    pub fn enable_security_cipher(&mut self) { self.security_cipher = true; }
     /// Fork the live DRAM into a sparse plaintext hashed view before the HV
     /// starts. Physical/encrypted writes must not destroy cached HV plaintext.
     /// This models view isolation only, NOT actual encryption or hash checking.
@@ -351,6 +359,35 @@ impl Bus {
     }
 
     pub fn read(&mut self, addr: u64, size: usize) -> Result<u64, BusError> {
+        // Security-engine cipher path: regions 1/3 are decrypted views of the
+        // physical DRAM (region 0). When enabled, reads transform on the fly.
+        let region = addr >> 40;
+        if (region == 1 || region == 3) && self.security_cipher && self.security.is_some() {
+            let off = (addr & 0x3FFF_FFFF) as usize;
+            let mut out = vec![0u8; size];
+            let mut i = 0;
+            while i < size {
+                let cur = off + i;
+                let block_off = cur & !0xF;
+                let in_block = cur & 0xF;
+                let take = (16 - in_block).min(size - i);
+                // read 16-byte block ciphertext
+                let mut ct = [0u8; 16];
+                for j in 0..16 {
+                    let phys = 0x8000_0000_0000_0000u64 + (block_off + j) as u64;
+                    ct[j] = self.read(phys, 1).unwrap_or(0) as u8;
+                }
+                let eng = self.security.as_ref().unwrap();
+                let pt = eng.xex_decrypt_block(&ct, block_off as u64);
+                for j in 0..take {
+                    out[i + j] = pt[in_block + j];
+                }
+                i += take;
+            }
+            let mut result = 0u64;
+            for b in &out { result = (result << 8) | *b as u64; }
+            return Ok(result);
+        }
         // A true TLB miss (no entry) must fault, even when translated.
         let addr = match self.xlate(addr, size, false) {
             Ok(a) => a,
@@ -407,6 +444,45 @@ impl Bus {
     }
 
     pub fn write(&mut self, addr: u64, size: usize, val: u64) -> Result<(), BusError> {
+        let region = addr >> 40;
+        if (region == 1 || region == 3) && self.security_cipher && self.security.is_some() {
+            let off = (addr & 0x3FFF_FFFF) as usize;
+            // Convert val to bytes big-endian.
+            let mut val_bytes = vec![0u8; size];
+            for i in 0..size {
+                val_bytes[i] = (val >> (8 * (size - 1 - i))) as u8;
+            }
+            // Group by 16-byte blocks.
+            let mut i = 0;
+            while i < size {
+                let cur = off + i;
+                let block_off = cur & !0xF;
+                let in_block = cur & 0xF;
+                let take = (16 - in_block).min(size - i);
+                // read existing ciphertext block
+                let mut ct = [0u8; 16];
+                for j in 0..16 {
+                    let phys = 0x8000_0000_0000_0000u64 + (block_off + j) as u64;
+                    ct[j] = self.read(phys, 1).unwrap_or(0) as u8;
+                }
+                // decrypt to plaintext, apply, encrypt back (scoped so self can be borrowed mutably afterwards)
+                let new_ct = {
+                    let eng = self.security.as_ref().unwrap();
+                    let mut pt = eng.xex_decrypt_block(&ct, block_off as u64);
+                    for j in 0..take {
+                        pt[in_block + j] = val_bytes[i + j];
+                    }
+                    eng.xex_encrypt_block(&pt, block_off as u64)
+                };
+                // write ciphertext
+                for j in 0..16 {
+                    let phys = 0x8000_0000_0000_0000u64 + (block_off + j) as u64;
+                    self.write(phys, 1, new_ct[j] as u64)?;
+                }
+                i += take;
+            }
+            return Ok(());
+        }
         let addr = match self.xlate(addr, size, true) {
             Ok(a) => a,
             Err(e) => return Err(e),

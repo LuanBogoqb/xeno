@@ -5,6 +5,24 @@ use xenon_cpu::hooks::{Action, Hooks};
 use xenon_cpu::runner::{run_until, StageEnd};
 use xenon_cpu::map::{build_bus, CACHE_WINDOW2_EA, CD_FLASH_OFFSET, CB_B_VM_LOOP, CB_B_VM_OK_EXIT, initial_regs, CB_A_DIGEST_HOOK, CB_A_LOAD, CB_NEXT_FLASH_OFFSET};
 
+fn parse_security_keys(text: &str) -> Option<([u8; 16], [u8; 16], [u8; 16])> {
+    let mut white: Option<[u8; 16]> = None;
+    let mut aes: Option<[u8; 16]> = None;
+    let mut hash: Option<[u8; 16]> = None;
+    for line in text.lines() {
+        let Some(i) = line.find("<-") else { continue; };
+        let keyname = line[i + 2..].trim().to_lowercase();
+        let rest = &line[..i];
+        let all: Vec<u8> = rest.split_whitespace().filter_map(|t| u8::from_str_radix(t, 16).ok()).collect();
+        if all.len() < 16 { continue; }
+        let last16: [u8; 16] = all[all.len() - 16..].try_into().ok()?;
+        if keyname.contains("white") { white = Some(last16); }
+        else if keyname.contains("aes") { aes = Some(last16); }
+        else if keyname.contains("hash") { hash = Some(last16); }
+    }
+    Some((white?, aes?, hash?))
+}
+
 const MAX_STEPS: u64 = 5_000_000;
 
 fn fmt_end(e: &StageEnd) -> String {
@@ -18,11 +36,13 @@ fn fmt_end(e: &StageEnd) -> String {
 }
 
 fn main() {
-    let usage = "usage: runcb <CB_A.mem> <FLASH.bin> [--stage cb_a|cb_b|cd|hv] [--max-steps N] [--hv-max-steps N] [--hv-threads 1|6] [--fuses FUSE.bin] [--security-engine] [--xosc-test FILE] [--log-pc PC:r,r] [--cd-stop-pc HEX] [--hv-stop-pc HEX] [addr:len ...]";
-    let mut args = std::env::args().skip(1);
-    let path = args.next().expect(usage);
-    let flash = std::fs::read(args.next().expect(usage)).expect("read flash");
+    let usage = "usage: runcb <CB_A.mem> <FLASH.bin> [--stage cb_a|cb_b|cd|hv] [--max-steps N] [--hv-max-steps N] [--hv-threads 1|6] [--fuses FUSE.bin] [--security-engine off|generic|real] [--security-keys FILE] [--xosc-test FILE] [--log-pc PC:r,r] [--cd-stop-pc HEX] [--hv-stop-pc HEX] [addr:len ...]";
+    let mut all_args: Vec<String> = std::env::args().skip(1).collect();
+    let path = all_args.first().cloned().expect(usage);
+    let flash_path = all_args.get(1).cloned().expect(usage);
+    let flash = std::fs::read(&flash_path).expect("read flash");
     let flash_copy = flash.clone();
+    let rest = all_args.split_off(2);
     let (mut stage, mut max_steps, mut dumps) = ("cb_a".to_string(), MAX_STEPS, Vec::new());
     let mut log_pcs: Vec<(u64, Vec<usize>)> = Vec::new();
     let mut fuses_path = "dumps/FUSE.bin".to_string();
@@ -30,26 +50,68 @@ fn main() {
     let mut hv_stop_pc = u64::MAX;
     let mut hv_max_steps = MAX_STEPS;
     let mut hv_threads = 1;
-    let mut security_engine = false;
-    let mut xosc_test: Option<String> = None;    while let Some(a) = args.next() {
+    let mut security_mode = "auto".to_string();
+    let mut security_keys: Option<String> = None;
+    let mut xosc_test: Option<String> = None;
+    let mut i = 0;
+    while i < rest.len() {
+        let a = rest[i].clone();
         match a.as_str() {
-            "--stage" => stage = args.next().expect(usage),
+            "--stage" => { stage = rest[i+1].clone(); i += 1; }
             "--log-pc" => {
-                // --log-pc <pc hex>:<r,r,...>
-                let spec = args.next().expect(usage);
+                let spec = &rest[i+1];
                 let (pc, regs) = spec.split_once(':').expect(usage);
                 log_pcs.push((u64::from_str_radix(pc, 16).expect(usage), regs.split(',').map(|r| r.parse().expect(usage)).collect::<Vec<usize>>()));
+                i += 1;
             }
-            "--fuses" => fuses_path = args.next().expect(usage),
-            "--cd-stop-pc" => cd_stop_pc = u64::from_str_radix(&args.next().expect(usage), 16).expect(usage),
-            "--hv-stop-pc" => hv_stop_pc = u64::from_str_radix(&args.next().expect(usage), 16).expect(usage),
-            "--hv-max-steps" => hv_max_steps = args.next().expect(usage).parse().expect("--hv-max-steps N"),
-            "--hv-threads" => { hv_threads = args.next().expect(usage).parse::<usize>().expect("--hv-threads 1|6"); assert!(matches!(hv_threads, 1 | 6)); }
-            "--security-engine" => { security_engine = true; }
-            "--xosc-test" => { xosc_test = Some(args.next().expect(usage)); }            "--max-steps" => max_steps = args.next().expect(usage).parse().expect("--max-steps N"),
+            "--fuses" => { fuses_path = rest[i+1].clone(); i += 1; }
+            "--cd-stop-pc" => { cd_stop_pc = u64::from_str_radix(&rest[i+1], 16).expect(usage); i += 1; }
+            "--hv-stop-pc" => { hv_stop_pc = u64::from_str_radix(&rest[i+1], 16).expect(usage); i += 1; }
+            "--hv-max-steps" => { hv_max_steps = rest[i+1].parse().expect("--hv-max-steps N"); i += 1; }
+            "--hv-threads" => { hv_threads = rest[i+1].parse::<usize>().expect("--hv-threads 1|6"); assert!(matches!(hv_threads, 1 | 6)); i += 1; }
+            "--security-engine" => {
+                if i + 1 < rest.len() && matches!(rest[i+1].as_str(), "off" | "generic" | "real" | "auto") {
+                    security_mode = rest[i+1].clone();
+                    i += 1;
+                } else {
+                    security_mode = "generic".into();
+                }
+            }
+            "--security-keys" => { security_keys = Some(rest[i+1].clone()); i += 1; }
+            "--xosc-test" => { xosc_test = Some(rest[i+1].clone()); i += 1; }
+            "--max-steps" => { max_steps = rest[i+1].parse().expect("--max-steps N"); i += 1; }
             _ => dumps.push(a),
         }
+        i += 1;
     }
+    // Resolve security-engine mode. Default (auto): use real captured keys when
+    // available, otherwise the generic all-0x55 model (distribution-safe).
+    let default_keys_path = "dumps/console/sec_keys_v25.txt".to_string();
+    let keys_path = security_keys.clone().unwrap_or_else(|| default_keys_path.clone());
+    let mut real_keys: Option<([u8; 16], [u8; 16], [u8; 16])> = None;
+    if security_mode == "auto" || security_mode == "real" {
+        if let Ok(text) = std::fs::read_to_string(&keys_path) {
+            real_keys = parse_security_keys(&text);
+        }
+    }
+    let (security_mode, security_log) = match security_mode.as_str() {
+        "off" => ("off".to_string(), "disabled (plaintext-backed)".to_string()),
+        "generic" => ("generic".to_string(), "generic (all-0x55)".to_string()),
+        "real" => {
+            if real_keys.is_some() {
+                ("real".to_string(), format!("real (keys from {})", keys_path))
+            } else {
+                ("generic".to_string(), format!("generic (all-0x55; real keys unavailable at {})", keys_path))
+            }
+        }
+        _ => { // auto
+            if real_keys.is_some() {
+                ("real".to_string(), format!("real (keys from {})", keys_path))
+            } else {
+                ("generic".to_string(), "generic (all-0x55)".to_string())
+            }
+        }
+    };
     let image = std::fs::read(&path).expect("read CB_A");
     let entry = u32::from_be_bytes(image[8..12].try_into().unwrap()) as u64;
 
@@ -105,8 +167,30 @@ CD steps: {s3}", fmt_end(&e3));
         (end, steps) = (e3, steps + s3);
     }
     if depth >= 3 && matches!(end, StageEnd::Handoff { .. }) {
-        if security_engine { bus.enable_security_engine(0x0123_4567_89AB_CDEF); }
-        println!("HV model: {hv_threads} thread(s), security engine {}", if security_engine { "experimental-enabled" } else { "plaintext-backed (no integrity/encryption)" });        bus.isolate_hashed_ram_plaintext(0x9000_0000_0000_0000);
+        match security_mode.as_str() {
+            "off" => {
+                println!("HV model: {hv_threads} thread(s), security engine disabled (plaintext-backed, no integrity/encryption)");
+            }
+            "generic" => {
+                bus.enable_security_engine(0);
+                bus.enable_security_cipher();
+                println!("HV model: {hv_threads} thread(s), security engine generic (all-0x55, cipher on data path)");
+            }
+            "real" => {
+                if let Some((w, a, h)) = real_keys {
+                    bus.enable_security_engine_with_keys(0, w, a, h);
+                    bus.enable_security_cipher();
+                    println!("HV model: {hv_threads} thread(s), security engine real ({}, cipher on data path)", security_log);
+                } else {
+                    bus.enable_security_engine(0);
+                    bus.enable_security_cipher();
+                    println!("HV model: {hv_threads} thread(s), security engine generic (all-0x55; real keys unavailable, cipher on data path)");
+                }
+            }
+            _ => {}
+        }
+        println!("HV security path: {}", security_log);
+        bus.isolate_hashed_ram_plaintext(0x9000_0000_0000_0000);
         bus.enable_software_mmu(cpu.slb);
         let (e4, s4) = if hv_threads == 6 {
             println!("HV topology: experimental 3 PPE / 6 threads, IIC enabled");

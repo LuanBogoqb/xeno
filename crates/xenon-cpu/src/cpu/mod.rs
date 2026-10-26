@@ -170,6 +170,13 @@ impl Cpu {
             self.pc = vector;
             return Ok(());
         }
+        if result.is_ok() && self.dec_armed {
+            self.tick_decrementer(1);
+            if self.dec_pending && (self.msr & 0x8000) != 0 {
+                self.dec_pending = false;
+                self.interrupt(0x900);
+            }
+        }
         result
     }
 
@@ -693,7 +700,7 @@ impl Cpu {
                     }
                 } else {
                     *reg = s;
-                    if bus.multicore && spr == 0x16 {
+                    if spr == 0x16 {
                         self.dec_armed = true;
                         self.dec_pending = (s as u32 as i32) < 0;
                     }
@@ -718,7 +725,11 @@ impl Cpu {
                         self.hrmor_armed = false;
                     }
                     if spr == 0x19 { bus.mmu.sdr1 = s; }
-                    if spr == 0x13E { bus.lpcr = s; }
+                    if spr == 0x13E {
+                        bus.lpcr = s;
+                        // LPCR[SF] (bit 0 in MSB-first numbering) selects 64-bit mode.
+                        bus.mmu.sf = s >> 63 == 1;
+                    }
                     if spr == 0x13F { bus.rmor = s; }
                     if spr == 0x3F9 { bus.mmu.hid6 = s; } // HID6 (0x3F6 is HID5)
                     if spr == 0x3B4 {

@@ -48,8 +48,19 @@ originais, sem override.
 
 ## Próximo passo sugerido
 
-Fechar M2 pelo lado do emulador: ligar o security engine por padrão quando a
-chave do boot estiver disponível e registrar no log qual caminho foi usado
-(real, `0x55` genérico ou desligado). Isso deixa o modo genérico pronto para
-distribuição — sem chave de ninguém e sem Live —, que é o pré-requisito para
-M3/M4 rodarem com a memória cifrada de verdade.
+M2 fechado pelo lado do emulador (2026-10-26): o security engine agora liga por
+padrão - modo `real` quando `dumps/console/sec_keys_v25.txt` (ou `--security-keys`)
+está disponível, senão `generic` (all-`0x55`, distribuição segura); `--security-engine off`
+desliga. O caminho usado é impresso em `HV security path: ...` no log do run.
+
+M2 encerrada no escopo atual (2026-10-26): cifra XEX validada e no caminho de
+dados; PP0 estendido, HID6 (DLP) e LPCR[SF] modelados; tags de integridade em
+AES-CBC-MAC (modelo); XOSC refinado (AES-CBC-MAC, ainda não Live válido).
+
+M3 (`xboxkrnl` real): em andamento. O kernel chega ao idle guest (6 threads)
+com a barreira multicore passada, mas não sai do idle sem eventos de dispositivo
+que não estão modelados. SMC permanece mailbox validado (6 comandos capturados).
+SMC completo e M4 (southbridge) ficam para quando o console estiver disponível.
+
+Próximo: retomar M3/M4 com o console (captura de SMC completo, timer/IRQ,
+dispositivos). Enquanto isso, trabalho offline pode focar em tooling/docs.

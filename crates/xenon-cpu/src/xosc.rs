@@ -31,23 +31,28 @@ impl XoscEngine {
 
     pub fn security(&mut self) -> &mut SecurityEngine { &mut self.security }
 
-    /// Produce a deterministic response for a challenge.  Real XOSC includes
-    /// fuse hashes, HV state and console-specific data; those are not modelled.
+    /// Produce a deterministic response for a challenge.  Real XOSC is a
+    /// separate `.xex` downloaded from Live and is not reproduced here; this
+    /// model now uses the security engine's AES-CBC-MAC over the challenge
+    /// (nonce, flags, CPU key and a fuse-derived placeholder) to be closer to
+    /// the real shape.  It is still NOT a valid Live response.
     pub fn respond(&self, challenge: &XoscChallenge) -> XoscResponse {
-        let mut buf = [0u8; 64];
-        buf[..16].copy_from_slice(&challenge.nonce);
-        buf[16..20].copy_from_slice(&challenge.flags.to_be_bytes());
-        buf[20..28].copy_from_slice(&self.cpu_key.to_be_bytes());
-        // Mix with master key.
+        // Fuse-derived placeholder: real XOSC folds in fuse hashes and HV
+        // state.  Without a capture we use a fixed, documented constant.
+        const FUSE_HASH_PLACEHOLDER: u64 = 0x5845_4E4F_5345_4300; // "XENOSEC\0"
+        let mut msg = Vec::with_capacity(16 + 4 + 8 + 8);
+        msg.extend_from_slice(&challenge.nonce);
+        msg.extend_from_slice(&challenge.flags.to_be_bytes());
+        msg.extend_from_slice(&self.cpu_key.to_be_bytes());
+        msg.extend_from_slice(&FUSE_HASH_PLACEHOLDER.to_be_bytes());
+
+        // Use the security engine's AES-CBC-MAC (same primitive as tags).
+        let mac = self.security.tag_page(0, &msg);
+
+        // Expand the 64-bit MAC into a 32-byte digest deterministically.
         let mut digest = [0u8; 32];
-        let mut h: u64 = 0xCBF29CE484222325;
-        for &b in &buf {
-            h ^= b as u64;
-            h = h.wrapping_mul(0x100000001B3);
-        }
-        // Expand to 32 bytes deterministically.
         for i in 0..4usize {
-            let mut x = h ^ (i as u64).wrapping_mul(0x9E3779B97F4A7C15);
+            let mut x = mac ^ (i as u64).wrapping_mul(0x9E3779B97F4A7C15);
             for j in 0..8 {
                 x ^= x >> 33;
                 x = x.wrapping_mul(0xFF51AFD7ED558CCD);

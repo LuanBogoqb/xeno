@@ -195,12 +195,31 @@ impl SecurityEngine {
     }
 
     pub fn tag_page(&self, addr: u64, data: &[u8]) -> u64 {
-        let mut h = 0xCBF29CE484222325u64;
-        for &b in data {
-            h ^= b as u64;
-            h = h.wrapping_mul(0x100000001B3);
+        // AES-CBC-MAC (retail) using hash_key as the AES key. Replaces the
+        // previous XOR/FNV placeholder with a real block-cipher MAC. Still a
+        // model: the exact Xenon integrity tag (algorithm, IV, padding) is not
+        // validated against hardware and remains unverified.
+        use aes::Aes128;
+        use cipher::{BlockEncrypt, KeyInit};
+        use cipher::generic_array::GenericArray;
+        let cipher = Aes128::new(self.hash_key.as_slice().into());
+        let mut msg = Vec::with_capacity(8 + data.len() + 16);
+        msg.extend_from_slice(&addr.to_be_bytes());
+        msg.extend_from_slice(data);
+        msg.push(0x80);
+        while msg.len() % 16 != 0 {
+            msg.push(0);
         }
-        h ^ addr
+        let mut iv = [0u8; 16];
+        for chunk in msg.chunks(16) {
+            for i in 0..16 {
+                iv[i] ^= chunk[i];
+            }
+            let mut block = GenericArray::from(iv);
+            cipher.encrypt_block(&mut block);
+            iv = block.into();
+        }
+        u64::from_be_bytes(iv[..8].try_into().unwrap())
     }
 
     pub fn store_tag(&mut self, page: u64, tag: u64) {
