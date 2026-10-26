@@ -26,3 +26,6 @@ tools/stage4/
 # Generated profiles / captured key material
 *.profile
 session.bin
+
+# Local generated output (brand source package, exports)
+output/

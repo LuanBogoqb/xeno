@@ -1,4 +1,11 @@
-# xb-emu
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/banner-dark.png">
+    <img src="assets/brand/banner-light.png" alt="XENO" width="720">
+  </picture>
+</p>
+
+# XENO
 
 [![CI](https://github.com/LuanBogoqb/xb-emu/actions/workflows/ci.yml/badge.svg)](https://github.com/LuanBogoqb/xb-emu/actions/workflows/ci.yml)
 
@@ -6,7 +13,8 @@ Emulador de sistema completo (LLE) do Xbox 360: boot real da NAND, hypervisor,
 kernel e dash originais, sem HLE do sistema operacional. Alvo final: uma ISO
 bootável (Linux por baixo) que se comporta como um 360 de verdade.
 
-> Nada da Microsoft é distribuído aqui. Firmware, kernel, dash, keyvault e
+> Repositório/pacote: `xb-emu` · identidade visual: [`assets/brand/`](assets/brand/).
+> Nada da Microsoft é distribuído aqui: firmware, kernel, dash, keyvault e
 > chaves vêm da NAND do próprio usuário, em `dumps/` (fora do git). Escopo e
 > postura: [docs/decisions.md](docs/decisions.md).
 
@@ -32,24 +40,23 @@ do CD, HV chegando ao idle guest, e o **security engine validado em hardware**
 ```powershell
 cargo build --release
 cargo run --release -p xenon-cpu --bin runcb -- dumps/stages/CB_A.mem dumps/FLASH_1.bin --stage cd --max-steps 400000000
-```
 
-Requisitos, flags, testes e o layout de `dumps/`:
-[docs/getting-started.md](docs/getting-started.md).
-
-```powershell
 cargo test -p xenon-cpu     # 127 testes de unidade, sem dumps
 ```
+
+Requisitos, flags e o layout de `dumps/`:
+[docs/getting-started.md](docs/getting-started.md).
 
 ## Estrutura
 
 | Caminho | Conteúdo |
 |---|---|
 | `crates/xenon-cpu/` | emulador: PPC, memória/MMU, HV, SMC, security engine, XOSC |
-| `tools/` | análise Python da boot chain e dos XEX |
+| `tools/` | análise Python da boot chain e dos XEX (`xbolib/` é a base compartilhada) |
 | `tools/capture/` | captura no console: plugin de kernel e homebrews XDK |
 | `research/` | engenharia reversa do console e dos plugins (um README por alvo) |
 | `docs/` | guias, arquitetura, status e decisões |
+| `assets/brand/` | identidade visual |
 | `dumps/` | entradas e saídas locais (**fora do git**) |
 
 ## Documentação
