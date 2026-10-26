@@ -1,5 +1,9 @@
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]
+
 from capstone import Cs, CS_ARCH_PPC, CS_MODE_64, CS_MODE_BIG_ENDIAN
-data=open(r'C:\Users\Luan Bogo\xb-emu\dumps\console\hypervisor_17559.bin','rb').read()
+data=open(ROOT / 'dumps/console/hypervisor_17559.bin','rb').read()
 md=Cs(CS_ARCH_PPC, CS_MODE_64 | CS_MODE_BIG_ENDIAN)
 SIZE=len(data)
 
@@ -69,8 +73,8 @@ while worklist:
     processed.add(start)
 
 import json
-json.dump(sorted(call_targets), open(r'C:\Users\Luan Bogo\xb-emu\research\hv\analysis\call_targets.json','w'))
-json.dump(sorted(code), open(r'C:\Users\Luan Bogo\xb-emu\research\hv\analysis\code_addrs.json','w'))
-json.dump({hex(k):[v.mnemonic,v.op_str] for k,v in all_ins.items()}, open(r'C:\Users\Luan Bogo\xb-emu\research\hv\analysis\ins.json','w'))
+json.dump(sorted(call_targets), open(ROOT / 'research/hv/analysis/call_targets.json','w'))
+json.dump(sorted(code), open(ROOT / 'research/hv/analysis/code_addrs.json','w'))
+json.dump({hex(k):[v.mnemonic,v.op_str] for k,v in all_ins.items()}, open(ROOT / 'research/hv/analysis/ins.json','w'))
 print("code ins count", len(code))
 print("call targets count", len(call_targets))

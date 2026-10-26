@@ -1,4 +1,8 @@
-lines=open(r'C:\Users\Luan Bogo\xb-emu\research\hv\analysis\fulldis.txt').read().splitlines()
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]
+
+lines=open(ROOT / 'research/hv/analysis/fulldis.txt').read().splitlines()
 # parse
 ins=[]
 for l in lines:

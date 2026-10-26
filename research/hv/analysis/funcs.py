@@ -1,7 +1,11 @@
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]
+
 import json
-ins=json.load(open(r'C:\Users\Luan Bogo\xb-emu\research\hv\analysis\ins.json'))
-code_addrs=json.load(open(r'C:\Users\Luan Bogo\xb-emu\research\hv\analysis\code_addrs.json'))
-ct=json.load(open(r'C:\Users\Luan Bogo\xb-emu\research\hv\analysis\call_targets.json'))
+ins=json.load(open(ROOT / 'research/hv/analysis/ins.json'))
+code_addrs=json.load(open(ROOT / 'research/hv/analysis/code_addrs.json'))
+ct=json.load(open(ROOT / 'research/hv/analysis/call_targets.json'))
 entries=sorted(set(ct+[0x100]+[v for v in range(0x200,0x1100,0x100)]))
 # add addresses where a function might start: after blr? We'll also detect prologue? Keep simple.
 # Build map addr->index in sorted code_addrs
@@ -20,7 +24,7 @@ for i,e in enumerate(entries):
 out={}
 for e,rng in funcs.items():
     out[hex(e)]=[hex(a) for a in rng]
-json.dump(out, open(r'C:\Users\Luan Bogo\xb-emu\research\hv\analysis\funcs.json','w'))
+json.dump(out, open(ROOT / 'research/hv/analysis/funcs.json','w'))
 print('num funcs', len(funcs))
 # print sizes
 for e in sorted(funcs):

@@ -12,7 +12,6 @@ set "TARGET=%~1"
 if "%TARGET%"=="" set "TARGET=plugin"
 
 set "CANDIDATE="
-if exist "C:\Users\Luan Bogo\xdk\bin\win32\cl.exe" set "CANDIDATE=C:\Users\Luan Bogo\xdk"
 if not defined CANDIDATE if defined XEDK if exist "%XEDK%\bin\win32\cl.exe" set "CANDIDATE=%XEDK%"
 if not defined CANDIDATE if exist "C:\PROGRA~2\MICROS~4\bin\win32\cl.exe" set "CANDIDATE=C:\PROGRA~2\MICROS~4"
 if not defined CANDIDATE goto :nodk
