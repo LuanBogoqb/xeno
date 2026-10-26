@@ -27,6 +27,30 @@ Todas as chaves derivadas são `HMAC-SHA1(...)[:16]`, RC4 até o tamanho alinhad
 - CG = patch LZX-delta (janela 32 KiB pré-preenchida com os bytes antigos) → `kernel_17559.bin`, 0x1F0000 bytes, magic `NN 44 97`.
 - O CG **não é contíguo**: o bloco de 64 KiB em `0xC0000` é quase todo `0xFF` e deve ser pulado (o CG continua em `0xD0000`).
 
+## SMC
+
+O firmware do SMC fica em `0x800`; o header plano em `0x78` aponta tamanho e
+offset. Neste dump: 14.336 bytes, versão **2.05**.
+
+```powershell
+python tools/smcextract.py dumps/FLASH_1.bin dumps/smc-firmware
+```
+
+Saída em `dumps/smc-firmware/` (fora do git):
+
+| Arquivo | SHA-256 |
+|---|---|
+| `SMC_en.bin` (cifrado) | `1e908cd607c70cb1009be055e40051b228a28bc49f88cc81086a659a325bfc3a` |
+| `SMC_dec.bin` (plano) | `492cd815a722d4e52e512d084453f9d0a663b10dd866016b44877aad0f50c143` |
+
+O `manifest.json` guarda offset, tamanho, versão e o hash da fonte
+(`FLASH_1.bin`, `37e5ce5b…40a7545`). A versão do firmware bate com a resposta
+viva do comando `0x12` (`12 62 02 05…`, versão **2.05**) registrada em
+`dumps/smc/SMC-00.TXT`.
+
+É firmware lido da flash, não uma resposta do SMC em execução; patches do RGH
+podem estar presentes.
+
 ## Validação
 
 - `kernel_base.bin` é idêntico byte a byte ao `ce_unc` do xenon-bltool (compilado aqui, ver `tools/build/xenon-bltool/`) e o SHA-1 dele bate com `original_hash` do CG.
@@ -38,6 +62,6 @@ Todas as chaves derivadas são `HMAC-SHA1(...)[:16]`, RC4 até o tamanho alinhad
 
 - CB_A2 não decifrado (provavelmente irrelevante pro emulador; existe só pro glitch).
 - O xenon-bltool não decifra o CF/CG desta imagem (offset do `cg_hmac` e lacuna em `0xC0000`); a nossa implementação é a que funciona.
-- Layout do restante da flash (sistema de arquivos, SMC, KV em `0x4000`).
+- Layout do restante da flash (sistema de arquivos e KV em `0x4000`).
 
 Referência de algoritmo: InvoxiPlayGames/xenon-bltool (GPL-2, lido só para derivar as chaves; o código aqui é próprio).

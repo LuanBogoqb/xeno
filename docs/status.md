@@ -50,7 +50,8 @@ M2 fecha pelo lado do emulador; o que sobra depende de hardware ou do M7.
 - Chave por boot: o runner usa as chaves capturadas ou o modelo `generic`;
   gerar a chave do próprio boot segue em aberto.
 - `xboxkrnl` real (M3) e southbridge (M4). O SMC atual é um mailbox validado
-  contra o console, não o microcontrolador completo.
+  contra o console, não o microcontrolador completo; o firmware 2.05 está em
+  `dumps/smc-firmware/`.
 
 ## Próximo
 
