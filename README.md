@@ -13,6 +13,9 @@ Emulador de sistema completo (LLE) do Xbox 360: boot real da NAND, hypervisor,
 kernel e dash originais, sem HLE do sistema operacional. Alvo final: uma ISO
 bootável (Linux por baixo) que se comporta como um 360 de verdade.
 
+Nada da Microsoft é distribuído aqui: firmware, kernel, dash e keyvault vêm da
+NAND do próprio usuário, em `dumps/` (fora do git).
+
 ## Status
 
 | | Marco | Estado |
@@ -62,5 +65,16 @@ entrada mais usados:
 - [Arquitetura](docs/architecture.md) — módulos, mapa de memória, fluxo de boot.
 - [Status](docs/status.md) — marcos M0–M7, o que está validado e o que falta.
 - [Começando](docs/getting-started.md) — compilar, rodar, testar.
+- [Plugins](docs/plugins.md) — carregar plugin de kernel como o Dashlaunch faz.
 - [Pesquisa](research/README.md) — notas de engenharia reversa e disassembly.
 - [Padrões do repositório](docs/padroes/README.md) — texto, organização e segurança.
+
+## Licença
+
+GPL-3.0-or-later: uso, estudo, modificação e redistribuição são livres, desde que
+o derivado continue sob a mesma licença e diga o que mudou. Ver [LICENSE](LICENSE).
+
+O nome XENO e a identidade visual de `assets/brand/` não vão junto com o código:
+fork que se apresente como XENO não é este projeto.
+
+De onde veio cada coisa, e sob qual licença: [CREDITS.md](CREDITS.md).

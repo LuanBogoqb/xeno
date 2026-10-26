@@ -21,6 +21,7 @@ Onde cada coisa mora, quando uma coisa nova pode existir, e o que não entra.
 | `docs/padroes/` | estas regras | sim |
 | `assets/brand/` | identidade visual | sim |
 | `.github/workflows/` | CI: build, clippy, testes de unidade, checagem das ferramentas | sim |
+| `LICENSE`, `CREDITS.md`, `AGENTS.md` | licença, créditos e o ponteiro para os padrões | sim |
 | `dumps/` | entrada e saída local: flash, estágios, capturas, chaves | não |
 | `samples/` | binário analisado | não |
 | `scratch/` | experimento descartável | não |
