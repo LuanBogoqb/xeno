@@ -1,6 +1,6 @@
 # CB_A → CB_B → CD: execução até o handoff
 
-## Resultado (2026-10-25)
+## Resultado
 
 O CD termina no emulador: **271.049.701 instruções**, incluindo o CF chamado pelo CD.
 O pequeno acréscimo em relação ao valor original (271.049.695) vem da resposta

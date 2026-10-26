@@ -1,61 +1,61 @@
-# Xbox 360 Hypervisor (17559) � Security Engine / Crypto Analysis
+# Hypervisor do Xbox 360 (17559): security engine e criptografia
 
-Binary: `dumps/console/hypervisor_17559.bin` (65536 bytes)
-CPU key at file offset 0x20: `5cb2...6f78 (redacted; ver dumps/console/)`
+Binário: `dumps/console/hypervisor_17559.bin` (65536 bytes).
+CPU key no offset 0x20: `5cb2...6f78 (redacted; ver dumps/console/)`.
 
-## Method
+## Método
 
-- Disassembled with Capstone (`CS_ARCH_PPC`, `CS_MODE_64 | CS_MODE_BIG_ENDIAN`).
-- Recursive descent from the reset vector (0x100) plus hypercall dispatch
-  tables (file offsets 0x80/0xae80) to reach code not directly branched to.
-- Searched for offset-0x20 references, high/SoC MMIO addresses, 10-16
-  iteration loops, and constants (0x1b, 0x63, 0x9e3779b9). No AES S-box or
-  TEA constants are present; AES is implemented in hardware, not in this HV.
+- Desmontado com Capstone (`CS_ARCH_PPC`, `CS_MODE_64 | CS_MODE_BIG_ENDIAN`).
+- Descida recursiva a partir do vetor de reset (0x100) mais as tabelas de
+  despacho de hypercall (offsets de arquivo 0x80/0xae80), para alcançar código
+  que não é alvo de branch direto.
+- Busca por referências ao deslocamento 0x20, endereços altos e de MMIO do SoC,
+  laços de 10 a 16 iterações e constantes (0x1b, 0x63, 0x9e3779b9). Não há
+  S-box de AES nem constante de TEA: o AES é de hardware, não está neste HV.
 
-## 1. Functions referencing offset 0x20 (CPU-key-adjacent)
+## 1. Funções que referenciam o deslocamento 0x20 (vizinho da CPU key)
 
-The well-known 128-byte block copy at `0xe14` loads/stores `0x20(r3)` /
-`0x20(r4)` as part of copying 16 qwords. Other code that touches displacement
-`0x20` of a structure:
+A cópia de bloco de 128 bytes em `0xe14` carrega e grava `0x20(r3)` /
+`0x20(r4)` ao copiar 16 qwords. Outros pontos que tocam o deslocamento `0x20`
+de uma estrutura:
 
-| Address | Context |
+| Endereço | Contexto |
 |---|---|
-| `0x202c` | `lwz r10, 0x20(r3)` compared against `0x42440302` (device/revision check) |
-| `0x21ac`, `0x21c4` | `ld r11, 0x20(r31)` (16-byte copy into a buffer) |
-| `0x3e08` | `ld r11, 0x20(r11)` (linked-list / table entry) |
-| `0x6a18` | `std r29, 0x20(r11)` (store into a 0x40-byte record) |
-| `0x85d4`, `0x884c` | `std r10, 0x20(r11)` (security-engine register save/restore, see section 3) |
-| `0x8fd0`, `0x8fd8` | `std/ld r11, 0x20(r18)` (security-engine register clear/poll) |
-| `0xa9b8`, `0xa9cc` | `ld/std r6, 0x20(r4/r3)` (generic 8-qword block copy) |
+| `0x202c` | `lwz r10, 0x20(r3)` comparado com `0x42440302` (checagem de dispositivo/revisão) |
+| `0x21ac`, `0x21c4` | `ld r11, 0x20(r31)` (cópia de 16 bytes para buffer) |
+| `0x3e08` | `ld r11, 0x20(r11)` (lista encadeada / entrada de tabela) |
+| `0x6a18` | `std r29, 0x20(r11)` (grava em registro de 0x40 bytes) |
+| `0x85d4`, `0x884c` | `std r10, 0x20(r11)` (save/restore de registrador do security engine, seção 3) |
+| `0x8fd0`, `0x8fd8` | `std/ld r11, 0x20(r18)` (limpeza e polling de registrador do security engine) |
+| `0xa9b8`, `0xa9cc` | `ld/std r6, 0x20(r4/r3)` (cópia genérica de 8 qwords) |
 
-The CPU key itself (0x20..0x2f of the HV header) is consumed by the
-`0xe14` copy and by the security-engine setup in section 3; no other routine
-reads the raw 16 bytes directly.
+A própria CPU key (0x20..0x2f do header do HV) é consumida pela cópia em `0xe14`
+e pelo setup do security engine da seção 3; nenhuma outra rotina lê os 16 bytes
+crus diretamente.
 
-## 2. High / SoC addresses accessed
+## 2. Endereços altos e do SoC acessados
 
-Beyond the usual `0x8000_xxxx` low memory, the HV programs memory-mapped
-I/O at these bases:
+Além da memória baixa habitual em `0x8000_xxxx`, o HV programa I/O mapeada em
+memória nestas bases:
 
-- `0x8000020000000000` - SoC base used for `lis 2/4/6; bl 0x6a0`.
-- `0x8000020000040000` (I/O block `+0x6000/+0x6100`) - used at `0x3088`.
-- `0x8000020000050000` (I/O block `+0x6000..+0x6040`) - used by `0x84e0`.
-- `0x8000020000060000` (I/O block `+0x1a0`, `+0x1c8`) - used by `0x84e0`.
-- `0x80000200ea000000` - IIC (interrupt controller), programmed at `0xb510`
-  (`stw` to `+0x1014`).
-- The documented security-engine block is `0x24000` relative to SoC; the HV
-  reaches it through the `0x84e0` save/restore path rather than by a literal
-  `0x24000` immediate.
+- `0x8000020000000000`: base do SoC usada por `lis 2/4/6; bl 0x6a0`.
+- `0x8000020000040000` (bloco de I/O `+0x6000/+0x6100`): usada em `0x3088`.
+- `0x8000020000050000` (bloco de I/O `+0x6000..+0x6040`): usada por `0x84e0`.
+- `0x8000020000060000` (bloco de I/O `+0x1a0`, `+0x1c8`): usada por `0x84e0`.
+- `0x80000200ea000000`: IIC (controlador de interrupções), programado em `0xb510`
+  (`stw` para `+0x1014`).
+- O bloco documentado do security engine é `0x24000` relativo ao SoC; o HV chega
+  nele pelo caminho de save/restore de `0x84e0`, não por um imediato `0x24000`.
 
-## 3. Candidate security-engine (memory encryption) routine - 0x84e0
+## 3. Rotina candidata do security engine (cifra de memória): 0x84e0
 
-Called from `0x8b40`, `0x9370`, `0xa458` (`bl 0x84e0`); paired with
-`0x87a8` (restore). It saves the five security-engine registers
-(`0x6000..0x6040`) into a global at `0x6360(r2)`, clears them, waits for
-completion, then later restores them. This is the routine that configures
-the memory-encryption engine during boot and on world switches.
+Chamada de `0x8b40`, `0x9370` e `0xa458` (`bl 0x84e0`), com a rotina par em
+`0x87a8` (restore). Salva os cinco registradores do security engine
+(`0x6000..0x6040`) em um global em `0x6360(r2)`, zera, espera a conclusão e
+depois restaura. É a rotina que configura o motor de cifra de memória no boot e
+na troca de mundo.
 
-Full disassembly:
+Disassembly completo:
 
 ```
 84e0: mflr r12
@@ -70,10 +70,10 @@ Full disassembly:
 8504: ble cr6, 0x850c
 8508: bl 0x218
 850c: stb r3, 0x82(r30)
-8510: sync 
+8510: sync
 8514: li r11, 1
 8518: stb r11, 0x81(r30)
-851c: sync 
+851c: sync
 8520: lis r3, 6
 8524: ori r3, r3, 0x1000
 8528: bl 0x6a0
@@ -101,12 +101,12 @@ Full disassembly:
 8580: li r12, -0x101
 8584: and r11, r11, r12
 8588: std r11, 0x1a0(r29)
-858c: eieio 
+858c: eieio
 8590: ld r11, 0x1a0(r29)
 8594: cmpldi cr6, r11, 0
 8598: beq cr6, 0x85a0
-859c: nop 
-85a0: isync 
+859c: nop
+85a0: isync
 85a4: addis r11, r2, 1
 85a8: ld r10, 0x6000(r3)
 85ac: li r31, 0
@@ -121,29 +121,29 @@ Full disassembly:
 85d0: ld r10, 0x6040(r3)
 85d4: std r10, 0x20(r11)
 85d8: std r31, 0x6000(r3)
-85dc: eieio 
+85dc: eieio
 85e0: std r31, 0x6010(r3)
-85e4: eieio 
+85e4: eieio
 85e8: std r31, 0x6020(r3)
-85ec: eieio 
+85ec: eieio
 85f0: std r31, 0x6030(r3)
-85f4: eieio 
+85f4: eieio
 85f8: std r31, 0x6040(r3)
-85fc: eieio 
+85fc: eieio
 8600: ld r10, 0x6040(r3)
 8604: cmpldi cr6, r10, 0
 8608: beq cr6, 0x8610
-860c: nop 
-8610: isync 
+860c: nop
+8610: isync
 8614: ld r10, 0x1c8(r29)
 8618: std r10, 0x28(r11)
 861c: std r31, 0x1c8(r29)
-8620: eieio 
+8620: eieio
 8624: ld r11, 0x1c8(r29)
 8628: cmpldi cr6, r11, 0
 862c: beq cr6, 0x8634
-8630: nop 
-8634: isync 
+8630: nop
+8634: isync
 8638: li r10, 5
 863c: li r11, 0
 8640: rldimi r11, r10, 0xd, 0x13
@@ -154,7 +154,7 @@ Full disassembly:
 8654: bne cr6, 0x86ec
 8658: li r9, 2
 865c: stb r9, 0x81(r11)
-8660: sync 
+8660: sync
 8664: b 0x866c
 8668: mr r31, r31
 866c: lbz r9, 0x81(r11)
@@ -174,8 +174,8 @@ Full disassembly:
 86a4: bne cr6, 0x8690
 86a8: cmpldi cr6, r10, 0
 86ac: beq cr6, 0x86b4
-86b0: nop 
-86b4: isync 
+86b0: nop
+86b4: isync
 86b8: li r11, 0x180
 86bc: mr r10, r30
 86c0: lbz r9, 0(r10)
@@ -186,8 +186,8 @@ Full disassembly:
 86d4: bne cr6, 0x86c0
 86d8: cmpldi cr6, r31, 0
 86dc: beq cr6, 0x86e4
-86e0: nop 
-86e4: isync 
+86e0: nop
+86e4: isync
 86e8: b 0x8700
 86ec: bl 0x218
 86f0: mr r31, r31
@@ -196,12 +196,12 @@ Full disassembly:
 86fc: bne cr6, 0x86f0
 8700: li r11, 0x7c
 8704: std r11, 8(r28)
-8708: eieio 
+8708: eieio
 870c: ld r11, 8(r28)
 8710: cmpldi cr6, r11, 0
 8714: beq cr6, 0x871c
-8718: nop 
-871c: isync 
+8718: nop
+871c: isync
 8720: mfspr r10, 0x16
 8724: lis r11, 0x7fff
 8728: stw r10, 0x88(r30)
@@ -221,7 +221,7 @@ Full disassembly:
 8760: stw r10, 0x8c(r30)
 8764: mtspr 0x136, r11
 8768: mfspr r11, 0x399
-876c: sync 
+876c: sync
 8770: lis r12, -0x71
 8774: nor r10, r9, r9
 8778: ori r12, r12, 0xffff
@@ -229,70 +229,71 @@ Full disassembly:
 8780: and r11, r11, r12
 8784: or r11, r10, r11
 8788: mtspr 0x399, r11
-878c: sync 
-8790: isync 
+878c: sync
+8790: isync
 8794: li r11, 3
 8798: stb r11, 0x81(r30)
-879c: sync 
+879c: sync
 87a0: addi r1, r1, 0x80
 87a4: b 0xa858
 ```
 
-Paired restore routine `0x87a8` (excerpt) loads the five saved values back
-from `0x6360(r2)` into `0x6000..0x6040(r3)` and polls for completion.
+A rotina par de restore em `0x87a8` (trecho) recarrega os cinco valores salvos
+de `0x6360(r2)` em `0x6000..0x6040(r3)` e faz polling até concluir.
 
-## 4. Loops of 10-16 iterations
+## 4. Laços de 10 a 16 iterações
 
-Static scan found the following `mtctr` loops with counters in [8,20]. None
-contain AES-round constants or S-boxes; they are byte copies / checksums
-/ MMIO polling, not software crypto:
+A varredura estática encontrou os laços `mtctr` abaixo, com contador entre 8 e
+20. Nenhum contém constante de rodada de AES nem S-box: são cópia de bytes,
+checksum e polling de MMIO, não criptografia em software.
 
-| Address | Counter | Purpose (from context) |
+| Endereço | Contador | Papel (pelo contexto) |
 |---|---|---|
-| `0x216c` | 16 | copy 16 bytes into buffer |
-| `0x3cd4` | 16 | table copy |
-| `0x3f34` | 16 | table copy |
-| `0x502c` | 16 | table copy |
-| `0x53c4` | 16 | table copy |
-| `0x54d0` | 16 | table copy |
-| `0x5aa0` | 16 | table copy |
-| `0x5ae8` | 16 | table copy |
-| `0x6ec8` | 10 | copy 10 bytes |
-| `0x9788`, `0x9928`, `0x9a78`, `0x9d18`, `0xa088`, `0xa14c`, `0xa480` | 12 | copy 12 bytes / loop |
-| `0x9f3c` | 16 | copy 16 bytes |
-| `0x2108` family | 12 | buffer fill |
-| `0x42a0`, `0x7104` | 20 | larger copy |
+| `0x216c` | 16 | cópia de 16 bytes para buffer |
+| `0x3cd4` | 16 | cópia de tabela |
+| `0x3f34` | 16 | cópia de tabela |
+| `0x502c` | 16 | cópia de tabela |
+| `0x53c4` | 16 | cópia de tabela |
+| `0x54d0` | 16 | cópia de tabela |
+| `0x5aa0` | 16 | cópia de tabela |
+| `0x5ae8` | 16 | cópia de tabela |
+| `0x6ec8` | 10 | cópia de 10 bytes |
+| `0x9788`, `0x9928`, `0x9a78`, `0x9d18`, `0xa088`, `0xa14c`, `0xa480` | 12 | cópia de 12 bytes por volta |
+| `0x9f3c` | 16 | cópia de 16 bytes |
+| família `0x2108` | 12 | preenchimento de buffer |
+| `0x42a0`, `0x7104` | 20 | cópia maior |
 
-## 5. Call graph from the reset vector (0x100)
+## 5. Grafo de chamadas a partir do vetor de reset (0x100)
 
 ```
-0x100 (system reset)
-  -> 0x1870 (primary init; only if SPR 0x131 == 0)
-       0x1880: bla 0xb510   (IIC init: writes 0xea00/0x2000000000000000)
-       0x1884: bl  0x3c4     (dcache/line zero, r4 blocks)
-       0x188c: bl  0x2e8     (returns address 0x6a00000001f60000)
+0x100 (reset do sistema)
+  -> 0x1870 (init primária; só se SPR 0x131 == 0)
+       0x1880: bla 0xb510   (init do IIC: grava 0xea00/0x2000000000000000)
+       0x1884: bl  0x3c4     (zera dcache/linha, r4 blocos)
+       0x188c: bl  0x2e8     (devolve o endereço 0x6a00000001f60000)
        0x1890: bl  0x3c4
-       0x1898: ... (MMU/SLB setup)
-       0x1918: ... (sets SDR1/PCR at 0x130/0x131)
+       0x1898: ... (setup de MMU/SLB)
+       0x1918: ... (grava SDR1/PCR em 0x130/0x131)
        0x1938: bl  0x2e8
-       0x1944: mtspr 0x131, r3   (publish PCR)
-       0x1958: beql 0x364      (secondary-thread path)
-       0x195c: slbia / SLB load loop (0x1964..)
-  secondary path 0x364: bl 0x218 (enter HV mode / disable interrupts)
+       0x1944: mtspr 0x131, r3   (publica o PCR)
+       0x1958: beql 0x364      (caminho de thread secundária)
+       0x195c: slbia / laço de carga de SLB (0x1964..)
+  caminho secundário 0x364: bl 0x218 (entra em modo HV / desabilita interrupções)
 ```
 
-Hypercall entry (`0x77c`, table at `0x80`) dispatches through `0xae80`
-to handlers in the `0x0xxx`/`0x2xxx` (file offset) ranges; security-related
-hypercalls land in the `0x84e0`/`0x87a8` pair and the `0xa458` setup.
+A entrada de hypercall (`0x77c`, tabela em `0x80`) despacha por `0xae80` para
+handlers nas faixas `0x0xxx`/`0x2xxx` (offset de arquivo); as hypercalls de
+segurança caem no par `0x84e0`/`0x87a8` e no setup de `0xa458`.
 
-## 6. Suspicious constants / patterns
+## 6. Constantes e padrões suspeitos
 
-- `0x42440302` at `0x2034` - compared against a word at `+0x20` of a device
-  structure (likely a device-ID / revision check).
-- `0x71700` at `0x2c1c` - compared against a counter at `0x6aa0(r10)`
-  (version / revision gate).
-- `0xc0` (IIC vector base) written at `0x1910`.
-- `0x1010`/`0x1014` IIC register offsets.
-- `0x6360(r2)` global - 5-word save area for the security-engine registers.
-- No `0x1b`/`0x63`/`0x9e3779b9` immediates and no AES S-box in the image;
-  crypto is delegated to the security engine hardware via `0x84e0`.
+- `0x42440302` em `0x2034`: comparado com a palavra em `+0x20` de uma estrutura
+  de dispositivo (provavelmente checagem de ID ou revisão).
+- `0x71700` em `0x2c1c`: comparado com um contador em `0x6aa0(r10)` (gate de
+  versão ou revisão).
+- `0xc0` (base do vetor do IIC) gravado em `0x1910`.
+- `0x1010`/`0x1014`: offsets de registrador do IIC.
+- global `0x6360(r2)`: área de save de 5 palavras para os registradores do
+  security engine.
+- Não há imediato `0x1b`/`0x63`/`0x9e3779b9` nem S-box de AES na imagem; a
+  criptografia é delegada ao hardware do security engine por `0x84e0`.
