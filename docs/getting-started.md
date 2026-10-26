@@ -54,7 +54,7 @@ comparar byte a byte com os arquivos de referência.
 ## Testes
 
 ```powershell
-cargo test -p xenon-cpu                      # testes de unidade, sem dumps
+cargo test -p xenon-cpu                      # unidade e CLI, sem dumps
 cargo test -p xenon-cpu --release --test chain -- --ignored   # cadeia real (precisa de dumps)
 
 # as duas provas do security engine (precisam da captura v25)
@@ -62,9 +62,11 @@ cargo test -p xenon-cpu --test chain hv_dump_key_search -- --ignored
 cargo test -p xenon-cpu --test chain captured_pair_with_real_keys_validates_cipher -- --ignored
 ```
 
-O CI (`.github/workflows/ci.yml`) roda build, clippy, testes de unidade e
-compila os testes de integração; os `#[ignore]` não rodam lá porque dependem
-dos dumps.
+O CI (`.github/workflows/ci.yml`) roda build, clippy, testes de unidade e os
+testes de integração sem dump (`tests/cli.rs`). A suíte de cadeia também roda,
+mas cada teste que precisa de `dumps/` imprime `skipping:` e retorna quando o
+diretório não existe; no checkout limpo o CI prova o harness, não a emulação.
+
 
 ## Dumps
 

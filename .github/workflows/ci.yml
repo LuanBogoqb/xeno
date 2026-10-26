@@ -37,10 +37,15 @@ jobs:
       - name: Unit tests
         run: cargo test --workspace --lib
 
-      # The chain tests need a console dump (dumps/) and are #[ignore]d, so CI
-      # only proves they still compile.
-      - name: Compile integration tests
-        run: cargo test --workspace --no-run
+      # Integration tests that need no console dump run here. The chain suite
+      # needs the owner's dumps, which are not distributed, so it is marked
+      # #[ignore] and skips itself when dumps/ is absent; running it in CI
+      # proves the harness and the skip path, not the emulation.
+      - name: Integration tests
+        run: cargo test --workspace --tests
+
+      - name: Chain tests (skip without dumps)
+        run: cargo test -p xenon-cpu --test chain -- --ignored
 
   python:
     name: Python tools (syntax + imports)

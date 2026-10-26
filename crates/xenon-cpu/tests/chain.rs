@@ -6,6 +6,24 @@ fn root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap()
 }
 
+/// The dumps are the owner's and are not distributed, so CI has none. Every
+/// test that needs them skips with a message instead of failing; locally the
+/// same suite runs for real when `dumps/` is present.
+fn dumps_present() -> bool {
+    ["dumps/stages/CB_A.mem", "dumps/FLASH_1.bin"]
+        .iter()
+        .all(|p| root().join(p).exists())
+}
+
+macro_rules! require_dumps {
+    () => {
+        if !dumps_present() {
+            eprintln!("skipping: dumps/ is not present (see docs/getting-started.md)");
+            return;
+        }
+    };
+}
+
 /// Runs `runcb` and returns (stdout lines, the hex dump requested as `addr:len`).
 fn runcb(extra: &[&str], dump: &str) -> (String, Vec<u8>) {
     let out = Command::new(env!("CARGO_BIN_EXE_runcb"))
@@ -24,6 +42,7 @@ fn runcb(extra: &[&str], dump: &str) -> (String, Vec<u8>) {
 #[test]
 #[ignore]
 fn cd_in_ram_matches_stage_file() {
+    require_dumps!();
     let (text, mem) = runcb(&["--stage", "cb_b", "--max-steps", "30000000"], "8000017c04000000:5400");
     assert!(text.contains("HANDOFF pc=0x4000300"), "{text}");
     let cd = std::fs::read(root().join("dumps/stages/CD.bin")).unwrap();
@@ -39,6 +58,7 @@ fn cd_in_ram_matches_stage_file() {
 #[test]
 #[ignore]
 fn cd_decompresses_base_kernel_byte_identically() {
+    require_dumps!();
     let (text, mem) = runcb(&["--stage", "cd", "--max-steps", "60000000", "--cd-stop-pc", "4000de4"], "8000000000000000:120000");
     assert!(text.contains("CD end: Handoff { pc: 67112420 }"));
     let expected = std::fs::read(root().join("dumps/stages/kernel_base.bin")).unwrap();
@@ -49,6 +69,7 @@ fn cd_decompresses_base_kernel_byte_identically() {
 #[test]
 #[ignore]
 fn cd_executes_cf_update_byte_identically_before_finalization() {
+    require_dumps!();
     let (text, mem) = runcb(&["--stage", "cd", "--max-steps", "400000000", "--cd-stop-pc", "4000950"], "8000000000000000:1f0000");
     assert!(text.contains("CD end: Handoff { pc: 67111248 }"));
     let expected = std::fs::read(root().join("dumps/stages/kernel_17559.bin")).unwrap();
@@ -59,6 +80,7 @@ fn cd_executes_cf_update_byte_identically_before_finalization() {
 #[test]
 #[ignore]
 fn cd_completes_real_handoff_with_nand_patches_and_original_fuses() {
+    require_dumps!();
     let (text, mem) = runcb(&["--stage", "cd", "--max-steps", "400000000",
         "800002000001fd00:200", "4000260:90"], "8000000000000000:1f0000");
     assert!(text.contains("CD end: Handoff { pc: 256 }"));
@@ -107,6 +129,7 @@ fn cd_completes_real_handoff_with_nand_patches_and_original_fuses() {
 #[test]
 #[ignore]
 fn hv_boots_virtual_kernel_and_enters_the_guest_system_call_handler() {
+    require_dumps!();
     let (text, code) = runcb(&["--stage", "hv", "--max-steps", "400000000",
         "--hv-stop-pc", "c00"], "8000010000000100:20");
     assert!(text.contains("CD end: Handoff { pc: 256 }"), "{text}");
@@ -123,6 +146,7 @@ fn hv_boots_virtual_kernel_and_enters_the_guest_system_call_handler() {
 #[test]
 #[ignore]
 fn kernel_initializes_memory_and_threads_up_to_the_multicore_barrier() {
+    require_dumps!();
     let (text, hv_code) = runcb(&["--stage", "hv", "--max-steps", "400000000",
         "--hv-max-steps", "20000000", "--hv-stop-pc", "8015d440",
         "80000000001a5748:4"], "8000010000001248:4");
@@ -139,6 +163,7 @@ fn kernel_initializes_memory_and_threads_up_to_the_multicore_barrier() {
 #[test]
 #[ignore]
 fn secondary_threads_execute_guest_startup_and_release_the_barrier() {
+    require_dumps!();
     let (text, count) = runcb(&["--stage", "hv", "--max-steps", "400000000",
         "--hv-threads", "6", "--hv-max-steps", "20000000", "--hv-stop-pc", "8015d44c"],
         "80000000001a5748:4");
@@ -154,6 +179,7 @@ fn secondary_threads_execute_guest_startup_and_release_the_barrier() {
 #[test]
 #[ignore]
 fn all_six_threads_reach_idle_after_the_guest_barrier() {
+    require_dumps!();
     let (text, hv_code) = runcb(&["--stage", "hv", "--max-steps", "400000000",
         "--hv-threads", "6", "--hv-max-steps", "40000000",
         "--log-pc", "8015d44c:10"], "8000010000000100:4");

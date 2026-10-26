@@ -27,6 +27,13 @@ fn parse_security_keys(text: &str) -> Option<([u8; 16], [u8; 16], [u8; 16])> {
 
 const MAX_STEPS: u64 = 5_000_000;
 
+const USAGE: &str = "usage: runcb <CB_A.mem> <FLASH.bin> [--stage cb_a|cb_b|cd|hv] [--max-steps N] [--hv-max-steps N] [--hv-threads 1|6] [--fuses FUSE.bin] [--security-engine off|generic|real] [--security-keys FILE] [--launch-ini FILE] [--plugins-dir DIR] [--plugin FILE] [--xosc-test FILE] [--log-pc PC:r,r] [--cd-stop-pc HEX] [--hv-stop-pc HEX] [addr:len ...]";
+
+fn usage_exit() -> ! {
+    eprintln!("{USAGE}");
+    std::process::exit(2);
+}
+
 fn fmt_end(e: &StageEnd) -> String {
     match e {
         StageEnd::Stop(Stop::Unmapped(BusError::Unmapped { addr, size, write })) => {
@@ -38,10 +45,10 @@ fn fmt_end(e: &StageEnd) -> String {
 }
 
 fn main() {
-    let usage = "usage: runcb <CB_A.mem> <FLASH.bin> [--stage cb_a|cb_b|cd|hv] [--max-steps N] [--hv-max-steps N] [--hv-threads 1|6] [--fuses FUSE.bin] [--security-engine off|generic|real] [--security-keys FILE] [--launch-ini FILE] [--plugins-dir DIR] [--plugin FILE] [--xosc-test FILE] [--log-pc PC:r,r] [--cd-stop-pc HEX] [--hv-stop-pc HEX] [addr:len ...]";
+    let usage = USAGE;
     let mut all_args: Vec<String> = std::env::args().skip(1).collect();
-    let path = all_args.first().cloned().expect(usage);
-    let flash_path = all_args.get(1).cloned().expect(usage);
+    let Some(path) = all_args.first().cloned() else { usage_exit() };
+    let Some(flash_path) = all_args.get(1).cloned() else { usage_exit() };
     let flash = std::fs::read(&flash_path).expect("read flash");
     let flash_copy = flash.clone();
     let rest = all_args.split_off(2);
