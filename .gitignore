@@ -4,5 +4,25 @@ __pycache__/
 dumps/
 .superpowers/
 target/
-.superpowers/
-target/
+
+# Build artifacts (Xbox 360 XDK output, native builds)
+*.exe
+*.obj
+*.pdb
+*.xdb
+*.ilk
+*.xex
+*.dll
+*.lib
+*.map
+
+# Scratch experiments kept out of the repo (moved to scratch/, preserved locally)
+scratch/
+
+# Third-party reference sources, downloaded (see research/hv/README.md for URLs)
+tools/stage3/
+tools/stage4/
+
+# Generated profiles / captured key material
+*.profile
+session.bin
