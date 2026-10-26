@@ -12,6 +12,7 @@ target/
 *.xdb
 *.ilk
 *.xex
+*.pe
 *.dll
 *.lib
 *.map
