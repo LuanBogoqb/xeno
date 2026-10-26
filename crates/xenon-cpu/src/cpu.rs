@@ -29,13 +29,17 @@ pub struct Cpu {
     pub cr: u32,
     pub xer: u64,
     pub msr: u64,
+    /// SF-dependent record semantics enabled with the experimental post-CD MMU.
+    word_mode: bool,
     /// Time base: advances by one per executed instruction.
     pub tb: u64,
+    pub(crate) dec_pending: bool,
+    pub(crate) dec_armed: bool,
     /// HRMOR written by mtspr 0x139; takes effect at the next context-synchronizing instruction (isync, rfid),
     /// or else after the instruction that follows the write (CB_B changes it right before a `blr`).
     pending_hrmor: Option<u64>,
     hrmor_armed: bool,
-    /// Segment lookaside buffer: (RB, RS) as written by slbmte, indexed by RB[58..63] (the entries are not translated yet).
+    /// Per-thread SLB: (RB, RS) as written by slbmte, indexed by RB[58..63].
     pub slb: [(u64, u64); 64],
     /// SPRs without dedicated state; reads of never-written ones give 0.
     pub spr: HashMap<u16, u64>,
@@ -52,7 +56,7 @@ fn sext16(v: u32) -> u64 {
 
 impl Cpu {
     pub fn new(entry: u64) -> Cpu {
-        Cpu { gpr: [0; 32], pc: entry, lr: 0, ctr: 0, cr: 0, xer: 0, msr: 0, tb: 0, pending_hrmor: None, hrmor_armed: false, slb: [(0, 0); 64], spr: HashMap::new() }
+        Cpu { gpr: [0; 32], pc: entry, lr: 0, ctr: 0, cr: 0, xer: 0, msr: 0, word_mode: false, tb: 0, dec_pending: false, dec_armed: false, pending_hrmor: None, hrmor_armed: false, slb: [(0, 0); 64], spr: HashMap::new() }
     }
 
     pub fn run(&mut self, bus: &mut Bus, max_steps: u64) -> Stop {
@@ -100,10 +104,12 @@ impl Cpu {
         self.set_cr_field(n, f | self.so());
     }
 
-    /// Rc=1 forms update CR0 from the full 64-bit result.
+    /// Rc=1 compares the signed word in SF=0, doubleword in SF=1. The legacy
+    /// boot interpreter retains its pre-M2 behavior until the new MMU is on.
     fn rc(&mut self, w: u32, v: u64) {
         if w & 1 != 0 {
-            self.cmp_signed(0, v as i64, 0);
+            let value = if self.word_mode { v as u32 as i32 as i64 } else { v as i64 };
+            self.cmp_signed(0, value, 0);
         }
     }
 
@@ -126,8 +132,77 @@ impl Cpu {
     }
 
     pub fn step(&mut self, bus: &mut Bus) -> Result<(), Stop> {
+        let result = self.step_inner(bus);
+        let fetch = bus.fetching;
+        bus.fetching = false;
+        bus.translated = false;
+        if let Err(Stop::Unmapped(BusError::Protection { addr, write, no_execute })) = &result {
+            let pc = if self.msr >> 63 == 0 { self.pc as u32 as u64 } else { self.pc };
+            self.spr.insert(0x1A, pc);
+            let reason = if *no_execute { 0x1000_0000 } else { 0x0800_0000 };
+            self.spr.insert(0x1B, self.msr | if fetch { reason } else { 0 });
+            if !fetch {
+                self.spr.insert(0x13, if self.msr >> 63 == 0 { *addr as u32 as u64 } else { *addr });
+                self.spr.insert(0x12, reason | if *write { 0x0200_0000 } else { 0 });
+            }
+            self.msr = MSR_HV | (1 << 63) | (self.msr & 0x1000);
+            self.pc = if fetch { 0x400 } else { 0x300 };
+            return Ok(());
+        }
+        if let Err(Stop::Unmapped(BusError::Translation { addr, write, segment })) = &result {
+            let vector = match (fetch, segment) {
+                (true, true) => 0x480,
+                (true, false) => 0x400,
+                (false, true) => 0x380,
+                (false, false) => 0x300,
+            };
+            let saved_pc = if self.msr >> 63 == 0 { self.pc as u32 as u64 } else { self.pc };
+            self.spr.insert(0x1A, saved_pc);
+            self.spr.insert(0x1B, self.msr | if fetch && !segment { 0x4000_0000 } else { 0 });
+            if !fetch {
+                self.spr.insert(0x13, if self.msr >> 63 == 0 { *addr as u32 as u64 } else { *addr }); // DAR
+                self.spr.insert(0x12, 0x4000_0000 | if *write { 0x0200_0000 } else { 0 });
+            }
+            // Replacement way hint consumed by the HV's software reload path.
+            // Single-CPU deterministic replacement; class is computed by HV.
+            self.spr.insert(0x3B2, 8);
+            self.msr = MSR_HV | (1 << 63) | (self.msr & 0x1000);
+            self.pc = vector;
+            return Ok(());
+        }
+        result
+    }
+
+    /// Advance a programmed decrementer in deterministic emulated time.
+    pub(crate) fn tick_decrementer(&mut self, ticks: u64) {
+        if !self.dec_armed { return; }
+        if let Some(dec) = self.spr.get_mut(&0x16) {
+            let old = *dec as u32;
+            // Request on the unsigned 0 -> FFFFFFFF transition, independently
+            // of MSR[EE]. Delivery waits until interrupts are enabled.
+            if ticks > old as u64 { self.dec_pending = true; }
+            *dec = old.wrapping_sub(ticks as u32) as u64;
+        }
+    }
+
+    /// Architectural hardware interrupt entry.
+    pub(crate) fn interrupt(&mut self, vector: u64) {
+        self.spr.insert(0x1A, self.pc);
+        self.spr.insert(0x1B, self.msr);
+        self.msr = MSR_HV | (1 << 63) | (self.msr & 0x1000);
+        self.pc = vector;
+    }
+
+    fn step_inner(&mut self, bus: &mut Bus) -> Result<(), Stop> {
         let pc = self.pc;
-        let w = bus.read(pc, 4)? as u32;
+        self.word_mode = bus.mmu.enabled && self.msr >> 63 == 0;
+        bus.mmu.sf = self.msr >> 63 != 0;
+        bus.mmu.problem = self.msr & 0x4000 != 0;
+        bus.fetching = true;
+        bus.translated = self.msr & 0x20 != 0;
+        let w = bus.fetch(pc)? as u32;
+        bus.fetching = false;
+        bus.translated = self.msr & 0x10 != 0;
         let mut next = pc.wrapping_add(4);
         let rt = (w >> 21 & 31) as usize;
         let ra = (w >> 16 & 31) as usize;
@@ -140,6 +215,7 @@ impl Cpu {
             7 => self.gpr[rt] = (self.gpr[ra] as i64).wrapping_mul(simm as i64) as u64,
             12 | 13 => {
                 let (t, c) = self.gpr[ra].overflowing_add(simm);
+                let c = if self.word_mode { (self.gpr[ra] as u32).overflowing_add(simm as u32).1 } else { c };
                 self.gpr[rt] = t;
                 self.xer = self.xer & !XER_CA | if c { XER_CA } else { 0 };
                 self.rc(w >> 26 & 1, t);
@@ -148,8 +224,9 @@ impl Cpu {
                 // subfic
                 let (t, c1) = (!self.gpr[ra]).overflowing_add(simm);
                 let (t, c2) = t.overflowing_add(1);
+                let carry = if self.word_mode { (!self.gpr[ra] as u32 as u64) + (simm as u32 as u64) + 1 > u32::MAX as u64 } else { c1 || c2 };
                 self.gpr[rt] = t;
-                self.xer = self.xer & !XER_CA | if c1 || c2 { XER_CA } else { 0 };
+                self.xer = self.xer & !XER_CA | if carry { XER_CA } else { 0 };
             }
             10 => {
                 let a = if w >> 21 & 1 == 1 { self.gpr[ra] } else { self.gpr[ra] as u32 as u64 };
@@ -171,11 +248,18 @@ impl Cpu {
                 }
             }
             17 => {
+                if bus.mmu.enabled && w & 2 != 0 && matches!(w >> 5 & 0x7F, 0 | 2) {
+                    self.spr.insert(0x1A, if self.msr >> 63 == 0 { next as u32 as u64 } else { next });
+                    self.spr.insert(0x1B, self.msr);
+                    self.msr = MSR_HV | (1 << 63) | (self.msr & 0x1000);
+                    next = 0xC00;
+                } else {
                 // sc with LEV=2 is the hypervisor call
                 if w & 2 != 0 && w >> 5 & 0x7F == 2 {
                     return Err(Stop::Trap { pc });
                 }
                 return Err(bad);
+                }
             }
             18 => {
                 let disp = ((w & 0x03FF_FFFC) as i32) << 6 >> 6;
@@ -187,6 +271,27 @@ impl Cpu {
             }
             19 => {
                 match w >> 1 & 0x3FF {
+                    xo @ (33 | 129 | 193 | 225 | 257 | 289 | 417 | 449) => {
+                        let a = self.cr_bit(w >> 16 & 31);
+                        let b = self.cr_bit(w >> 11 & 31);
+                        let value = match xo {
+                            33 => !(a | b),   // crnor
+                            129 => a & !b,    // crandc
+                            193 => a ^ b,     // crxor
+                            225 => !(a & b),  // crnand
+                            257 => a & b,     // crand
+                            289 => !(a ^ b),  // creqv
+                            417 => a | !b,    // crorc
+                            449 => a | b,     // cror
+                            _ => unreachable!(),
+                        };
+                        let mask = 1 << (31 - rt);
+                        self.cr = (self.cr & !mask) | if value { mask } else { 0 };
+                        self.pc = next;
+                        self.tb += 1;
+                        self.age_hrmor(bus);
+                        return Ok(());
+                    }
                     0 => {
                         // mcrf
                         let (bf, bfa) = (w >> 23 & 7, w >> 18 & 7);
@@ -198,6 +303,10 @@ impl Cpu {
                         // rfid
                         next = self.spr.get(&0x1A).copied().unwrap_or(0) & !3;
                         self.msr = self.spr.get(&0x1B).copied().unwrap_or(0);
+                        if bus.mmu.enabled { self.msr &= !0x7800_0000; } // SRR1 storage-fault flags, not MSR bits
+                        if bus.mmu.enabled && self.msr >> 63 == 0 {
+                            next = next as u32 as u64;
+                        }
                         self.sync_context(bus);
                         self.pc = next;
                         return Ok(());
@@ -249,8 +358,8 @@ impl Cpu {
             25 => self.gpr[ra] = self.gpr[rt] | uimm << 16,
             26 => self.gpr[ra] = self.gpr[rt] ^ uimm,
             27 => self.gpr[ra] = self.gpr[rt] ^ uimm << 16,
-            28 => {
-                self.gpr[ra] = self.gpr[rt] & uimm;
+            28 | 29 => { // andi. / andis.
+                self.gpr[ra] = self.gpr[rt] & (uimm << if w >> 26 == 29 { 16 } else { 0 });
                 self.rc(1, self.gpr[ra]);
             }
             30 => {
@@ -322,7 +431,7 @@ impl Cpu {
             }
             _ => return Err(bad),
         }
-        self.pc = next;
+        self.pc = if bus.mmu.enabled && self.msr >> 63 == 0 { next as u32 as u64 } else { next };
         self.tb += 1;
         self.age_hrmor(bus);
         Ok(())
@@ -346,6 +455,26 @@ impl Cpu {
                 self.cmp_unsigned(w >> 23 & 7, x, y);
             }
             23 => self.gpr[rt] = bus.read(ea_x, 4)?,
+            xo @ (53 | 55 | 119 | 311 | 375) if ra != 0 && ra != rt => {
+                let size = match xo { 53 => 8, 55 => 4, 119 => 1, _ => 2 };
+                let value = bus.read(ea_x, size)?;
+                self.gpr[rt] = if xo == 375 { value as u16 as i16 as i64 as u64 } else { value };
+                self.gpr[ra] = ea_x;
+            }
+            xo @ (181 | 183 | 247 | 439) if ra != 0 => {
+                let size = match xo { 181 => 8, 183 => 4, 247 => 1, _ => 2 };
+                bus.write(ea_x, size, s)?;
+                self.gpr[ra] = ea_x;
+            }
+            20 | 84 => { // lwarx / ldarx
+                let size = if xo_is(w, 20) { 4 } else { 8 };
+                self.gpr[rt] = bus.load_reserve(ea_x, size)?;
+            }
+            150 | 214 if w & 1 != 0 => { // stwcx. / stdcx.
+                let size = if xo_is(w, 150) { 4 } else { 8 };
+                let stored = bus.store_conditional(ea_x, size, s)?;
+                self.set_cr_field(0, if stored { 2 } else { 0 } | self.so());
+            }
             87 => self.gpr[rt] = bus.read(ea_x, 1)?,
             151 => bus.write(ea_x, 4, s & 0xFFFF_FFFF)?,
             215 => bus.write(ea_x, 1, s & 0xFF)?,
@@ -377,7 +506,18 @@ impl Cpu {
                 self.gpr[ra] = s as u32 as i32 as i64 as u64;
                 self.rc(w, self.gpr[ra]);
             }
+            954 => {
+                self.gpr[ra] = s as u8 as i8 as i64 as u64;
+                self.rc(w, self.gpr[ra]);
+            }
+            922 => {
+                self.gpr[ra] = s as u16 as i16 as i64 as u64;
+                self.rc(w, self.gpr[ra]);
+            }
             21 => self.gpr[rt] = bus.read(ea_x, 8)?,
+            279 => self.gpr[rt] = bus.read(ea_x, 2)?,
+            343 => self.gpr[rt] = bus.read(ea_x, 2)? as u16 as i16 as i64 as u64,
+            407 => bus.write(ea_x, 2, s & 0xFFFF)?,
             149 => bus.write(ea_x, 8, s)?,
             534 => self.gpr[rt] = (bus.read(ea_x, 4)? as u32).swap_bytes() as u64,
             662 => bus.write(ea_x, 4, (s as u32).swap_bytes() as u64)?,
@@ -391,9 +531,21 @@ impl Cpu {
                 self.gpr[ra] = (s as u32).leading_zeros() as u64;
                 self.rc(w, self.gpr[ra]);
             }
+            58 => { // cntlzd
+                self.gpr[ra] = s.leading_zeros() as u64;
+                self.rc(w, self.gpr[ra]);
+            }
             24 | 536 => {
                 let n = b & 0x3F;
                 self.gpr[ra] = if n & 0x20 != 0 { 0 } else if xo_is(w, 24) { ((s as u32) << n) as u64 } else { ((s as u32) >> n) as u64 };
+                self.rc(w, self.gpr[ra]);
+            }
+            824 => {
+                let n = rb as u32;
+                let value = s as u32 as i32;
+                self.gpr[ra] = (value >> n) as i64 as u64;
+                let carry = value < 0 && (s as u32 & ((1u32 << n) - 1)) != 0;
+                self.xer = (self.xer & !XER_CA) | if carry { XER_CA } else { 0 };
                 self.rc(w, self.gpr[ra]);
             }
             27 | 539 => {
@@ -403,6 +555,10 @@ impl Cpu {
             }
             235 => {
                 self.gpr[rt] = (a as i32 as i64).wrapping_mul(b as i32 as i64) as u64;
+                self.rc(w, self.gpr[rt]);
+            }
+            9 => {
+                self.gpr[rt] = ((a as u128 * b as u128) >> 64) as u64;
                 self.rc(w, self.gpr[rt]);
             }
             233 => {
@@ -421,9 +577,26 @@ impl Cpu {
                 let ca = (self.xer & XER_CA != 0) as u64;
                 let (t, c1) = (!a).overflowing_add(b);
                 let (t, c2) = t.overflowing_add(ca);
+                let carry = if self.word_mode { (!a as u32 as u64) + (b as u32 as u64) + ca > u32::MAX as u64 } else { c1 || c2 };
                 self.gpr[rt] = t;
-                self.xer = self.xer & !XER_CA | if c1 || c2 { XER_CA } else { 0 };
+                self.xer = self.xer & !XER_CA | if carry { XER_CA } else { 0 };
                 self.rc(w, t);
+            }
+            xo @ (10 | 138 | 202 | 200) => { // addc, adde, addze, subfze
+                let carry = (self.xer & XER_CA != 0) as u64;
+                let (left, right, cin) = match xo {
+                    10 => (a, b, 0),
+                    138 => (a, b, carry),
+                    202 => (a, 0, carry),
+                    200 => (!a, 0, carry),
+                    _ => unreachable!(),
+                };
+                let (value, c1) = left.overflowing_add(right);
+                let (value, c2) = value.overflowing_add(cin);
+                let carry = if self.word_mode { (left as u32 as u64) + (right as u32 as u64) + cin > u32::MAX as u64 } else { c1 || c2 };
+                self.gpr[rt] = value;
+                self.xer = (self.xer & !XER_CA) | if carry { XER_CA } else { 0 };
+                self.rc(w, value);
             }
             19 => {
                 // mfcr / mfocrf
@@ -435,23 +608,55 @@ impl Cpu {
                     self.cr as u64
                 };
             }
+            144 => {
+                // mtcrf / mtocrf: FXM selects CR fields, not individual bits.
+                let fxm = w >> 12 & 0xFF;
+                let mask = (0..8).filter(|i| fxm >> (7 - i) & 1 == 1)
+                    .fold(0u32, |m, i| m | 0xF << (28 - 4 * i));
+                self.cr = (self.cr & !mask) | (s as u32 & mask);
+            }
+            8 => {
+                let (value, borrow) = b.overflowing_sub(a);
+                let borrow = if self.word_mode { (b as u32).overflowing_sub(a as u32).1 } else { borrow };
+                self.gpr[rt] = value;
+                self.xer = (self.xer & !XER_CA) | if !borrow { XER_CA } else { 0 };
+                self.rc(w, value);
+            }
             83 => self.gpr[rt] = self.msr,
+            104 => {
+                self.gpr[rt] = a.wrapping_neg();
+                self.rc(w, self.gpr[rt]);
+            }
             146 => self.msr = s,
             178 => {
                 // mtmsrd: L=1 only touches EE (bit 48) and RI (bit 62)
                 let mask = if w >> 16 & 1 == 1 { 0x8002 } else { u64::MAX };
                 self.msr = self.msr & !mask | s & mask;
             }
-            402 => self.slb[(b & 63) as usize] = (b, s), // slbmte RS,RB
-            434 | 498 => {} // slbie / slbia: entries are not translated yet
+            402 => {
+                self.slb[(b & 63) as usize] = (b, s);
+                bus.mmu.slb = self.slb;
+            }
+            434 | 498 => {
+                if bus.mmu.enabled {
+                    for (rb, _) in &mut self.slb {
+                        if xo_is(w, 498) || *rb >> 28 == b >> 28 {
+                            *rb &= !0x0800_0000;
+                        }
+                    }
+                    bus.mmu.slb = self.slb;
+                }
+            }
             851 => self.gpr[rt] = self.slb[(b & 63) as usize].1, // slbmfev
             915 => self.gpr[rt] = self.slb[(b & 63) as usize].0, // slbmfee
             371 => {
                 let tbr = (w >> 16 & 31) | (w >> 11 & 31) << 5;
                 self.gpr[rt] = if tbr == 269 { self.tb >> 32 } else { self.tb };
             }
-            // barriers, cache management and TLB/SLB invalidates: no cache or MMU is modelled
-            598 | 854 | 54 | 86 | 982 | 470 | 278 | 246 | 274 | 306 => {}
+            // tlbie/tlbiel and slbie invalidate the experimental software TLB/SLB.
+            274 | 306 => { bus.mmu.invalidate_addr(b); }
+            // barriers, cache management and remaining invalidates: no cache modelled
+            598 | 854 | 54 | 86 | 982 | 470 | 278 | 246 => {}
             1014 => {
                 // dcbz zeroes a 32-byte line, dcbzl (RT bit 0) a 128-byte one
                 let line = if rt & 1 == 1 { 128 } else { 32 };
@@ -470,14 +675,54 @@ impl Cpu {
                 };
                 if xo == 339 {
                     self.gpr[rt] = *reg;
+                    match spr {
+                        0x13E => self.gpr[rt] = bus.lpcr,
+                        0x13F => self.gpr[rt] = bus.rmor,
+                        0x3F9 => self.gpr[rt] = bus.mmu.hid6, // HID6 (0x3F6 is HID5)
+                        _ => {}
+                    }
+                    if bus.multicore {
+                        self.gpr[rt] = match spr {
+                            0x88 => bus.ctrl[bus.active_thread / 2],
+                            0x139 => bus.hrmor,
+                            0x10C => self.tb & 0xFFFF_FFFF,
+                            0x10D => self.tb >> 32,
+                            0x3FF => bus.active_thread as u64,
+                            _ => self.gpr[rt],
+                        };
+                    }
                 } else {
                     *reg = s;
+                    if bus.multicore && spr == 0x16 {
+                        self.dec_armed = true;
+                        self.dec_pending = (s as u32 as i32) < 0;
+                    }
+                    if bus.multicore && spr == 0x11C { self.tb = (self.tb & !0xFFFF_FFFF) | (s & 0xFFFF_FFFF); }
+                    if bus.multicore && spr == 0x11D { self.tb = (s << 32) | (self.tb & 0xFFFF_FFFF); }
+                    if bus.multicore && spr == 0x98 {
+                        let ppe = bus.active_thread / 2;
+                        let sibling = bus.active_thread ^ 1;
+                        let old = bus.ctrl[ppe];
+                        let value = s | (old & (1 << (23 - sibling % 2)));
+                        for thread in ppe * 2..ppe * 2 + 2 {
+                            let bit = 1 << (23 - thread % 2);
+                            if old & bit == 0 && value & bit != 0 { bus.reset[thread] = true; }
+                        }
+                        bus.ctrl[ppe] = value;
+                    }
                     if (0x3B0..0x3B8).contains(&spr) && std::env::var_os("XB_TRACE_SPR").is_some() {
                         eprintln!("mtspr {spr:#x} = {s:#x} at pc {pc:#x}");
                     }
                     if spr == 0x139 {
                         self.pending_hrmor = Some(s);
                         self.hrmor_armed = false;
+                    }
+                    if spr == 0x19 { bus.mmu.sdr1 = s; }
+                    if spr == 0x13E { bus.lpcr = s; }
+                    if spr == 0x13F { bus.rmor = s; }
+                    if spr == 0x3F9 { bus.mmu.hid6 = s; } // HID6 (0x3F6 is HID5)
+                    if spr == 0x3B4 {
+                        bus.write_tlb(self.spr.get(&0x3B3).copied().unwrap_or(0), self.spr.get(&0x3B5).copied().unwrap_or(0), s);
                     }
                 }
             }
@@ -517,6 +762,273 @@ mod tests {
     }
 
     #[test]
+    fn protected_store_and_nx_fetch_enter_guest_storage_vectors() {
+        for nx in [false, true] {
+            let mut b = Bus::new();
+            let raw = 0x8000_0000_0000_0000;
+            b.map_ram(raw, 0x2000);
+            let word = d(36, 3, 4, 0) as u64;
+            b.write(raw + 0x1000, 4, word).unwrap();
+            let mut c = Cpu::new(0x80001000);
+            c.slb[0] = (0x88000000, 0x8000);
+            c.msr = 0x3030;
+            c.gpr[4] = c.pc;
+            c.gpr[3] = 0xDEADBEEF;
+            b.enable_software_mmu(c.slb);
+            b.mmu.insert(0x18, if nx { 0x1196 } else { 0x1193 }, 0x8001);
+            c.step(&mut b).unwrap();
+            assert_eq!(c.pc, if nx { 0x400 } else { 0x300 });
+            assert_eq!(c.spr[&0x1A], 0x80001000);
+            if nx { assert_eq!(c.spr[&0x1B], 0x10003030); }
+            else {
+                assert_eq!(c.spr[&0x13], 0x80001000);
+                assert_eq!(c.spr[&0x12], 0x0A000000);
+            }
+            assert_eq!(b.read(raw + 0x1000, 4), Ok(word));
+        }
+    }
+
+    #[test]
+    fn decrementer_latches_crossing_and_write_rearms() {
+        let (mut c, mut b) = setup(&[x(31, 3, 0x16, 0, 467, 0)]);
+        b.multicore = true;
+        c.spr.insert(0x16, 0); // observing the default register must not arm it
+        c.tick_decrementer(100);
+        assert!(!c.dec_pending);
+        c.spr.insert(0x16, 3);
+        c.dec_armed = true;
+        c.tick_decrementer(3);
+        assert_eq!(c.spr[&0x16], 0);
+        assert!(!c.dec_pending);
+        c.tick_decrementer(1);
+        assert_eq!(c.spr[&0x16], u32::MAX as u64);
+        assert!(c.dec_pending);
+        c.gpr[3] = 100;
+        c.step(&mut b).unwrap();
+        assert!(!c.dec_pending);
+        c.tick_decrementer(101);
+        assert!(c.dec_pending);
+        c.pc = BASE;
+        c.gpr[3] = 0xFFFFFFFF;
+        c.step(&mut b).unwrap();
+        assert!(c.dec_pending);
+    }
+
+    #[test]
+    fn indexed_update_memory_ops_update_base_only_after_success() {
+        for (load, store, size) in [(53, 181, 8), (55, 183, 4), (119, 247, 1), (311, 439, 2), (375, 439, 2)] {
+            let (mut c, mut b) = setup(&[x(31, 3, 4, 5, store, 0), x(31, 6, 4, 0, load, 0)]);
+            c.gpr[3] = u64::MAX;
+            c.gpr[4] = 0x2000;
+            c.gpr[5] = 8;
+            steps(&mut c, &mut b, 2);
+            assert_eq!(c.gpr[4], 0x2008);
+            assert_eq!(c.gpr[6], if load == 375 { u64::MAX } else { u64::MAX >> (8 * (8 - size)) });
+            c.pc = BASE;
+            c.gpr[4] = 0xF00000;
+            assert!(c.step(&mut b).is_err());
+            assert_eq!(c.gpr[4], 0xF00000);
+        }
+    }
+
+    #[test]
+    fn andis_masks_shifted_immediate_and_always_records() {
+        let (mut c, mut b) = setup(&[d(29, 3, 4, 0xA000), d(29, 3, 5, 0x1000)]);
+        c.gpr[3] = 0xFFFF_FFFF_8000_1234;
+        c.xer = XER_SO;
+        steps(&mut c, &mut b, 1);
+        assert_eq!(c.gpr[4], 0x8000_0000);
+        assert_eq!(c.cr >> 28, 5); // legacy test setup is doubleword record mode
+        steps(&mut c, &mut b, 1);
+        assert_eq!(c.gpr[5], 0);
+        assert_eq!(c.cr >> 28, 3);
+    }
+
+    #[test]
+    fn kernel_word_mode_records_zero_and_carry_at_the_32_bit_boundary() {
+        for sf in [false, true] {
+            let mut b = Bus::new();
+            let base = 0x8000_0000_0000_0000;
+            b.map_ram(base, 0x2000);
+            b.write(base + BASE, 4, d(13, 3, 3, 1) as u64).unwrap(); // addic. r3,r3,1
+            b.write(base + BASE + 4, 4, x(31, 5, 0, 4, 138, 0) as u64).unwrap(); // adde r5,r0,r4
+            b.enable_software_mmu([(0, 0); 64]);
+            let mut c = Cpu::new(BASE);
+            c.msr = if sf { 1 << 63 } else { 0 };
+            c.gpr[3] = u32::MAX as u64;
+            c.step(&mut b).unwrap();
+            assert_eq!(c.cr >> 28, if sf { 4 } else { 2 });
+            assert_eq!(c.xer & XER_CA != 0, !sf);
+            c.step(&mut b).unwrap();
+            assert_eq!(c.gpr[5], if sf { 0 } else { 1 });
+        }
+    }
+
+    #[test]
+    fn word_mode_subfc_uses_word_borrow_not_upper_register_bits() {
+        let mut b = Bus::new();
+        b.map_ram(0x8000_0000_0000_0000, 0x2000);
+        b.write(0x8000_0000_0000_0000 + BASE, 4, x(31, 3, 4, 5, 8, 1) as u64).unwrap();
+        b.enable_software_mmu([(0, 0); 64]);
+        let mut c = Cpu::new(BASE);
+        c.gpr[4] = 1 << 32;
+        c.step(&mut b).unwrap();
+        assert_ne!(c.xer & XER_CA, 0);
+        assert_eq!(c.cr >> 28, 2);
+    }
+
+    #[test]
+    fn software_mmu_system_call_enters_guest_hv_and_returns_after_sc() {
+        for word in [0x4400_0002, 0x4400_0042] {
+            let mut b = Bus::new();
+            b.map_ram(0x8000_0000_0000_0000, 0x10000);
+            b.write(0x8000_0000_0000_1000, 4, word).unwrap();
+            b.write(0x8000_0000_0000_0C00, 4, 0x4C00_0024).unwrap();
+            b.enable_software_mmu([(0, 0); 64]);
+            let mut c = Cpu::new(0x1000);
+            c.msr = 0x1000;
+            c.step(&mut b).unwrap();
+            assert_eq!(c.pc, 0xC00);
+            assert_eq!(c.spr[&0x1A], 0x1004);
+            assert_eq!(c.spr[&0x1B], 0x1000);
+            assert_ne!(c.msr & MSR_HV, 0);
+            c.step(&mut b).unwrap();
+            assert_eq!(c.pc, 0x1004);
+            assert_eq!(c.msr, 0x1000);
+        }
+    }
+
+    #[test]
+    fn software_mmu_misses_enter_hv_vectors_and_preserve_restart_state() {
+        for segment in [true, false] {
+            let mut c = Cpu::new(0x8007_8DB0);
+            let mut b = Bus::new();
+            if !segment { c.slb[8] = (0x8800_0008, 0x8100); }
+            b.enable_software_mmu(c.slb);
+            c.msr = 0x0200_3030;
+            c.step(&mut b).unwrap();
+            assert_eq!(c.pc, if segment { 0x480 } else { 0x400 });
+            assert_eq!(c.spr[&0x1A], 0x8007_8DB0);
+            assert_eq!(c.spr[&0x1B], 0x0200_3030 | if segment { 0 } else { 0x4000_0000 });
+            assert_eq!(c.msr, MSR_HV | (1 << 63) | 0x1000);
+            assert_eq!(c.spr[&0x3B2], 8);
+            assert!(!b.translated);
+        }
+    }
+
+    #[test]
+    fn software_mmu_data_fault_is_not_mistaken_for_fetch_and_dar_is_32_bit() {
+        let mut b = Bus::new();
+        b.map_ram(0x8000_0000_0000_0000, 0x10000);
+        b.write(0x8000_0000_0000_1000, 4, d(32, 3, 4, 0) as u64).unwrap();
+        b.enable_software_mmu([(0, 0); 64]);
+        let mut c = Cpu::new(0x1000);
+        c.msr = MSR_HV | 0x10;
+        c.gpr[4] = c.pc; // data EA equals PC, but this is a data segment miss
+        c.step(&mut b).unwrap();
+        assert_eq!(c.pc, 0x380);
+        assert_eq!(c.spr[&0x13], 0x1000);
+        c.pc = 0x1000;
+        c.msr = MSR_HV | 0x10;
+        c.gpr[4] = 0xFFFF_FFFF_8E04_8608;
+        c.step(&mut b).unwrap();
+        assert_eq!(c.spr[&0x13], 0x8E04_8608);
+    }
+
+    #[test]
+    fn software_mmu_rfid_truncates_32_bit_kernel_entry_pc() {
+        let mut b = Bus::new();
+        b.map_ram(0x8000_0000_0000_0000, 0x10000);
+        b.write(0x8000_0000_0000_1000, 4, 0x4C00_0024).unwrap();
+        b.enable_software_mmu([(0, 0); 64]);
+        let mut c = Cpu::new(0x1000);
+        c.spr.insert(0x1A, 0xFFFF_FFFF_8007_8DB0);
+        c.spr.insert(0x1B, 0x0200_3030);
+        c.step(&mut b).unwrap();
+        assert_eq!(c.pc, 0x8007_8DB0);
+    }
+
+    #[test]
+    fn carry_arithmetic_handles_both_overflow_stages() {
+        let cases = [
+            (10, u64::MAX, 1, false, 0, true),
+            (10, 1, 2, true, 3, false),
+            (138, u64::MAX, 0, true, 0, true),
+            (138, u64::MAX, u64::MAX, true, u64::MAX, true),
+            (138, 1, 2, false, 3, false),
+            (202, u64::MAX, 99, true, 0, true),
+            (202, 5, 99, false, 5, false),
+            (200, 0, 99, true, 0, true),
+            (200, 1, 99, true, u64::MAX, false),
+            (200, 0, 99, false, u64::MAX, false),
+        ];
+        for (xo, a, b, carry, expected, carry_out) in cases {
+            let (mut c, mut bus) = setup(&[x(31, 3, 4, 5, xo, 1)]);
+            c.gpr[4] = a;
+            c.gpr[5] = b;
+            c.xer = XER_SO | if carry { XER_CA } else { 0 };
+            steps(&mut c, &mut bus, 1);
+            assert_eq!(c.gpr[3], expected, "XO {xo}");
+            assert_eq!(c.xer & XER_CA != 0, carry_out, "XO {xo}");
+            assert_ne!(c.xer & XER_SO, 0);
+            assert_eq!(c.cr >> 28, if expected == 0 { 3 } else if expected >> 63 != 0 { 9 } else { 5 });
+        }
+    }
+
+    #[test]
+    fn cr_logical_truth_tables_preserve_other_bits() {
+        // Truth table bit index = 2*A+B.
+        for (xo, truth) in [(33, 0b0001), (129, 0b0100), (193, 0b0110), (225, 0b0111),
+            (257, 0b1000), (289, 0b1001), (417, 0b1101), (449, 0b1110)] {
+            for inputs in 0..4 {
+                let (mut c, mut b) = setup(&[x(19, 31, 4, 24, xo, 0)]);
+                c.cr = 0xA555_5555 & !((1 << 27) | (1 << 7));
+                c.cr |= ((inputs >> 1) << 27) | ((inputs & 1) << 7);
+                let before = c.cr;
+                steps(&mut c, &mut b, 1);
+                assert_eq!(c.cr, (before & !1) | (truth >> inputs & 1));
+                assert_eq!(c.pc, BASE + 4);
+                assert_eq!(c.tb, 1);
+            }
+        }
+    }
+
+    #[test]
+    fn cntlzd_counts_all_64_bits_and_records() {
+        for (value, expected) in [(0, 64), (1, 63), (0x10001, 47), (1 << 63, 0)] {
+            let (mut c, mut b) = setup(&[x(31, 3, 4, 0, 58, 1)]);
+            c.gpr[3] = value;
+            c.xer = XER_SO;
+            steps(&mut c, &mut b, 1);
+            assert_eq!(c.gpr[4], expected);
+            assert_eq!(c.cr >> 28, if expected == 0 { 3 } else { 5 });
+        }
+    }
+
+    #[test]
+    fn reserve_loads_and_conditional_stores_update_only_cr0() {
+        for (load_xo, store_xo, size, value) in [(20, 150, 4, 0x1234_5678), (84, 214, 8, 0x1234_5678_9ABC_DEF0)] {
+            let (mut c, mut b) = setup(&[
+                x(31, 3, 0, 4, load_xo, 0),
+                x(31, 5, 0, 4, store_xo, 1),
+                x(31, 5, 0, 4, store_xo, 1),
+            ]);
+            c.gpr[4] = 0x2000;
+            c.gpr[5] = value;
+            c.xer = XER_SO;
+            c.cr = 0x8ABC_DEF0;
+            b.write(0x2000, size, 0xDEAD).unwrap();
+            steps(&mut c, &mut b, 1);
+            assert_eq!(c.gpr[3], 0xDEAD);
+            steps(&mut c, &mut b, 1);
+            assert_eq!(b.read(0x2000, size), Ok(value));
+            assert_eq!(c.cr, 0x3ABC_DEF0); // EQ | SO
+            steps(&mut c, &mut b, 1);
+            assert_eq!(c.cr, 0x1ABC_DEF0); // reservation consumed
+        }
+    }
+
+    #[test]
     fn lis_ori_build_constant() {
         let (mut c, mut b) = setup(&[d(15, 3, 0, 0x8000), d(24, 3, 3, 0x1234)]);
         steps(&mut c, &mut b, 1);
@@ -536,11 +1048,75 @@ mod tests {
     }
 
     #[test]
+    fn instruction_and_data_translation_are_independent_and_errors_reset_bus_mode() {
+        let (mut c, mut b) = setup(&[0x8064_0000]); // lwz r3,0(r4)
+        b.map_ram(0x8000_0200_0000_0000, 0x10000);
+        b.write(0x8000_0200_0000_00FC, 4, 0x1234).unwrap();
+        b.write_tlb(0x102, 0x0200_0000_11BE, 0x1005);
+        c.gpr[4] = 0x1000_00FC;
+        c.msr = 0x10; // DR on, IR off
+        c.step(&mut b).unwrap();
+        assert_eq!(c.gpr[3], 0x1234);
+        c.pc = BASE;
+        c.gpr[4] = 0x2000_0000;
+        assert!(c.step(&mut b).is_err());
+        assert_eq!(b.read(BASE, 4), Ok(0x8064_0000));
+
+        b.write(0x8000_0200_0000_0000, 4, 0x3860_0007).unwrap();
+        c.pc = 0x1000_0000;
+        c.msr = 0x20; // IR on, DR off
+        c.step(&mut b).unwrap();
+        assert_eq!(c.gpr[3], 7);
+    }
+
+    #[test]
     fn extsw_sign_extends() {
         let (mut c, mut b) = setup(&[x(31, 3, 4, 0, 986, 0)]);
         c.gpr[3] = 0x0000_0000_8000_0000;
         steps(&mut c, &mut b, 1);
         assert_eq!(c.gpr[4], 0xFFFF_FFFF_8000_0000);
+    }
+
+    #[test]
+    fn cd_integer_instructions() {
+        for (xo, value, expected) in [(954, 0x80u64, 0xFFFFFFFFFFFFFF80u64), (922, 0x8000u64, 0xFFFFFFFFFFFF8000u64)] {
+            let (mut c, mut b) = setup(&[x(31, 3, 4, 0, xo, 1)]);
+            c.gpr[3] = value;
+            steps(&mut c, &mut b, 1);
+            assert_eq!(c.gpr[4], expected);
+            assert_eq!(c.cr >> 28, 8);
+        }
+        let (mut c, mut b) = setup(&[x(31, 3, 4, 0, 104, 0), x(31, 5, 4, 3, 8, 0)]);
+        c.gpr[4] = 1;
+        steps(&mut c, &mut b, 1);
+        assert_eq!(c.gpr[3], u64::MAX);
+        steps(&mut c, &mut b, 1);
+        assert_eq!(c.gpr[5], u64::MAX - 1);
+        assert_ne!(c.xer & XER_CA, 0);
+    }
+
+    #[test]
+    fn srawi_sign_extends_and_updates_carry() {
+        for (value, shift, expected, carry) in [(0x8000_0001u64, 3u64, 0xFFFFFFFFF0000000u64, true), (0x8000_0000u64, 0u64, 0xFFFFFFFF80000000u64, false), (8u64, 3u64, 1u64, false)] {
+            let (mut c, mut b) = setup(&[x(31, 3, 4, shift as u32, 824, 0)]);
+            c.gpr[3] = value;
+            c.xer = XER_CA;
+            steps(&mut c, &mut b, 1);
+            assert_eq!(c.gpr[4], expected);
+            assert_eq!(c.xer & XER_CA != 0, carry);
+        }
+    }
+
+    #[test]
+    fn indexed_halfword_loads_and_store() {
+        let (mut c, mut b) = setup(&[x(31, 3, 4, 5, 407, 0), x(31, 6, 4, 5, 279, 0), x(31, 7, 4, 5, 343, 0)]);
+        c.gpr[3] = 0x1234_8001;
+        c.gpr[4] = 0x2000;
+        c.gpr[5] = 2;
+        steps(&mut c, &mut b, 3);
+        assert_eq!(b.read(0x2002, 2), Ok(0x8001));
+        assert_eq!(c.gpr[6], 0x8001);
+        assert_eq!(c.gpr[7], 0xFFFFFFFFFFFF8001);
     }
 
     #[test]
@@ -752,6 +1328,37 @@ mod tests {
     }
 
     #[test]
+    fn mtcrf_and_mtocrf_preserve_unselected_fields() {
+        for (fxm, single, expected) in [(0x02, true, 0x1234_56D8), (0x81, false, 0xA234_567F), (0, false, 0x1234_5678)] {
+            let w = x(31, 5, 0, 0, 144, 0) | fxm << 12 | (single as u32) << 20;
+            let (c, _) = run1(w, |c, _| {
+                c.cr = 0x1234_5678;
+                c.gpr[5] = 0xDEAD_BEEF_ABCD_EFDF;
+            });
+            assert_eq!(c.cr, expected);
+        }
+    }
+
+    #[test]
+    fn mulhdu_returns_unsigned_high_half_and_honors_record_bit() {
+        for (a, b, expected) in [
+            (0, u64::MAX, 0),
+            (u64::MAX, u64::MAX, u64::MAX - 1),
+            (1 << 63, 2, 1),
+            (0x1234_5678_9ABC_DEF0, 0xFEDC_BA98_7654_3210, 0x121F_A00A_D77D_7422),
+        ] {
+            let (c, _) = run1(x(31, 3, 4, 5, 9, 1), |c, _| {
+                c.gpr[4] = a;
+                c.gpr[5] = b;
+                c.xer = XER_SO | XER_CA;
+            });
+            assert_eq!(c.gpr[3], expected);
+            assert_eq!(c.xer, XER_SO | XER_CA);
+            assert_eq!(c.cr >> 28, if expected == 0 { 3 } else if expected >> 63 != 0 { 9 } else { 5 });
+        }
+    }
+
+    #[test]
     fn op_mul_div() {
         let (c, _) = run1(x(31, 3, 4, 5, 235, 0), |c, _| {
             c.gpr[4] = 0xFFFF_FFFF_FFFF_FFFF; // -1 as 32-bit
@@ -886,6 +1493,32 @@ mod tests {
         });
         assert_eq!(c.pc, 0x4000);
         assert_eq!(c.msr, MSR_HV | 0x30);
+    }
+
+    #[test]
+    fn hid6_lives_at_spr_3f9_and_is_stored_for_the_mmu() {
+        // mtspr 0x3F9,r3 ; mfspr r4,0x3F9 -- HID6 (0x3F6 is HID5).
+        let (mut c, mut b) = setup(&[
+            x(31, 3, 0x3F9 & 31, 0x3F9 >> 5, 467, 0),
+            x(31, 4, 0x3F9 & 31, 0x3F9 >> 5, 339, 0),
+        ]);
+        c.gpr[3] = 0x0001_0038_0000_0000;
+        steps(&mut c, &mut b, 2);
+        assert_eq!(c.gpr[4], 0x0001_0038_0000_0000);
+        assert_eq!(b.mmu.hid6, 0x0001_0038_0000_0000);
+        assert!(b.mmu.large_pages_enabled());
+    }
+
+    #[test]
+    fn hid5_spr_3f6_stays_independent_of_hid6() {
+        let (mut c, mut b) = setup(&[
+            x(31, 3, 0x3F6 & 31, 0x3F6 >> 5, 467, 0),
+            x(31, 4, 0x3F6 & 31, 0x3F6 >> 5, 339, 0),
+        ]);
+        c.gpr[3] = 0x55;
+        steps(&mut c, &mut b, 2);
+        assert_eq!(c.gpr[4], 0x55);
+        assert_eq!(b.mmu.hid6, 0);
     }
 
     #[test]

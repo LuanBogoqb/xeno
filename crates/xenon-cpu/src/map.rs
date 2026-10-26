@@ -27,6 +27,9 @@ pub const CACHE_RAM_SIZE: usize = 0x40_0000;
 /// controller (first write: +0x4 at 0x7B8..).
 pub const DRAM_BASE: u64 = 0x8000_0000_0000_0000;
 pub const DRAM_SIZE: usize = 0x2000_0000;
+/// Security-engine region 1, key slot 0 (hashed RAM). Plaintext backing only:
+/// address routing is modelled here, not integrity tags or access protection.
+pub const HASHED_RAM_BASE: u64 = 0x0100_0000_0000;
 /// Where CB_B's code runs once it has copied itself into the locked cache (0x0300_0000 | image offset + 0x3000).
 pub const CB_B_CACHE_CODE: u64 = 0x0300_3000;
 /// CB_B's register-programming bytecode interpreter: loop head (image 0x9A8) and its success exit (0xDDC, r5 = 0).
@@ -42,6 +45,9 @@ pub const CACHE_WINDOW1_EA: u64 = 0x0300_0000;
 pub const CACHE_WINDOW2_EA: u64 = 0x0400_0000;
 /// Flash offset of the stage after CB_B (CD, 0x11A30 in this image); CB_A leaves it in r31 for CB_B.
 pub const CD_FLASH_OFFSET: u64 = 0x11A30;
+/// CD 0x614..0x644 sets SRR0=0x100, SRR1 with IR/DR clear, and HRMOR=1<<40.
+/// The final flash patch loop ends in rfid at CD+0x53FC.
+pub const CD_HANDOFF_PC: u64 = 0x100;
 pub const SOC_BASE: u64 = 0x8000_0200_0006_0000;
 pub const SOC_SIZE: u64 = 0x1_0000;
 
@@ -62,6 +68,35 @@ pub const REG_PRESETS: &[(u64, u64, &str)] = &[
 /// SMC mailbox (PCI BAR the stages program at config 0xD015_0010 to 0xEA00_1000).
 pub const SMC_BASE: u64 = 0x8000_0000_EA00_1000;
 pub const SMC_SIZE: u64 = 0x1000;
+
+/// Public boot-ROM RSA key, in the big-endian qword format consumed by CD.
+/// Numeric data: https://github.com/InvoxiPlayGames/xenon-bltool/blob/master/source/1bl-keys.c
+const BOOT_RSA_HEX: &str = concat!(
+    "00000020000100010000000000000000",
+    "e98db5dcaf388ef1389e28cb4a11c82252e11f53455660a252d4d1684ecc8099",
+    "d75c40c5af730ccf4406b06d16910838b3002dbceb1d0c1dc5c6680b804c620b",
+    "7ee8720ccf1db4bdee4b1136d1c9921fe9aec0515251f723d6bcf4e9588740b1",
+    "02665a43eb675f509432347aa750d9b4144eb002318ba7009a12c83b8f76e48f",
+    "33b5cd0c246d2ae557a044767841f48fcb3ab50ea1a2566d17db32ccb85a5fae",
+    "ed9a62315d887f6d9a5380b034c742512d944d8609328f71a7ba166ce6dc6b64",
+    "617d16b52051d0b11ffe1e35569a764d627f5df4b87dc4182c81b7afe47d135d",
+    "f40f63053f1aeded4beefd6d74e6a592a799817395d8c7a5a1c77b0905854104",
+);
+
+/// Minimal 1BL handoff data, not a verification override. CD reads the pointer
+/// at SRAM+0xFC, then copies the 0x110-byte RSA key and HMAC key at +0x148.
+/// The original ROM's placement is unknown; 0x200 is unused SRAM below CB_A.
+fn boot_handoff(bus: &mut Bus) {
+    let offset = 0x200;
+    let rsa: Vec<u8> = (0..BOOT_RSA_HEX.len()).step_by(2)
+        .map(|i| u8::from_str_radix(&BOOT_RSA_HEX[i..i + 2], 16).unwrap()).collect();
+    bus.write(SRAM_BASE + 0xFC, 4, offset).unwrap();
+    bus.load(SRAM_BASE + offset, &rsa);
+    bus.load(SRAM_BASE + offset + 0x148, &[
+        0xDD, 0x88, 0xAD, 0x0C, 0x9E, 0xD6, 0x69, 0xE7,
+        0xB5, 0x67, 0x94, 0xFB, 0x68, 0x56, 0x3E, 0xFA,
+    ]);
+}
 
 /// Bits that always read set: (absolute address, mask as seen on the bus, evidence).
 pub const REG_OR_MASKS: &[(u64, u64, &str)] = &[
@@ -87,10 +122,15 @@ pub fn build_bus(flash: Vec<u8>, fuses: FuseLines) -> Bus {
     bus.map_ram(SRAM_BASE, SRAM_SIZE);
     bus.map_alias(SRAM_ALIAS, 0x1_0000, CB_A_LOAD);
     bus.map_ram(DRAM_BASE, DRAM_SIZE);
+    bus.map_security_ram_plaintext(DRAM_BASE, DRAM_SIZE as u64);
     bus.map_ram(CACHE_RAM_BASE, CACHE_RAM_SIZE);
+    // Preserve the dedicated locked-cache backing ahead of generic region-1
+    // routing, including direct bit-63-set accesses made while copying CB_B.
+    bus.map_alias(CACHE_RAM_BASE, CACHE_RAM_SIZE as u64, CACHE_RAM_BASE);
     bus.map_alias(CACHE_RAM_BASE & !(1 << 63), CACHE_RAM_SIZE as u64, CACHE_RAM_BASE);
     bus.map_alias(CACHE_WINDOW1_EA, CACHE_RAM_SIZE as u64, CACHE_RAM_BASE);
     bus.map_ram(CACHE_RAM2_BASE, CACHE_RAM2_SIZE);
+    bus.map_alias(CACHE_RAM2_BASE, CACHE_RAM2_SIZE as u64, CACHE_RAM2_BASE);
     bus.map_alias(CACHE_RAM2_BASE & !(1 << 63), CACHE_RAM2_SIZE as u64, CACHE_RAM2_BASE);
     bus.map_alias(CACHE_WINDOW2_EA, CACHE_RAM2_SIZE as u64, CACHE_RAM2_BASE);
     // The 0x0200 in bits 32..47 is ignored by the peripheral space: CB_B uses 0x8000_0000_Dxxx_xxxx/Exxx_xxxx, CD
@@ -109,6 +149,7 @@ pub fn build_bus(flash: Vec<u8>, fuses: FuseLines) -> Bus {
         }
         bus.map_device(*base, *size, Box::new(regs));
     }
+    boot_handoff(&mut bus);
     bus
 }
 
@@ -122,6 +163,53 @@ pub fn initial_regs(cpu: &mut Cpu) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn locked_cache_backing_is_not_collapsed_into_hashed_dram() {
+        let mut bus = build_bus(vec![], FuseLines::from_text(""));
+        for (base, ea) in [(CACHE_RAM_BASE, CACHE_WINDOW1_EA), (CACHE_RAM2_BASE, CACHE_WINDOW2_EA)] {
+            bus.write(base + 0x360, 4, 0x3860_0009).unwrap();
+            assert_eq!(bus.read(base + 0x360, 4), Ok(0x3860_0009));
+            assert_eq!(bus.read(base & !(1 << 63) | 0x360, 4), Ok(0x3860_0009));
+            assert_eq!(bus.read(ea + 0x360, 4), Ok(0x3860_0009));
+            assert_eq!(bus.read(DRAM_BASE + ea + 0x360, 4), Ok(0));
+        }
+    }
+
+    #[test]
+    fn hashed_key_zero_routes_hv_fetch_and_data_to_existing_dram() {
+        let mut bus = build_bus(vec![], FuseLines::from_text(""));
+        bus.write(DRAM_BASE + CD_HANDOFF_PC, 4, 0x3860_0007).unwrap(); // li r3,7
+        bus.hrmor = HASHED_RAM_BASE;
+        let mut cpu = Cpu::new(CD_HANDOFF_PC);
+        cpu.msr = MSR_HV;
+        cpu.step(&mut bus).unwrap();
+        assert_eq!(cpu.gpr[3], 7);
+        bus.write(HASHED_RAM_BASE + 0x200, 8, 0x1234).unwrap();
+        assert_eq!(bus.read(DRAM_BASE + 0x200, 8), Ok(0x1234));
+        assert_eq!(bus.read((1 << 63) | HASHED_RAM_BASE | 0x200, 8), Ok(0x1234));
+        assert!(bus.read(HASHED_RAM_BASE + DRAM_SIZE as u64, 4).is_err());
+        assert!(bus.read(HASHED_RAM_BASE + DRAM_SIZE as u64 - 1, 2).is_err());
+        // The early HV uses key selectors 0x68 and 0x62 for its work areas.
+        assert_eq!(bus.read(HASHED_RAM_BASE | (0x68 << 32) | 0x200, 8), Ok(0x1234));
+        // Region 3 is plaintext-backed too; this is NOT a crypto test.
+        assert_eq!(bus.read(0x0300_0000_0200, 8), Ok(0x1234));
+        assert!(bus.read(0x0300_2000_0000, 4).is_err());
+        assert!(bus.read(0x8000_0200_1000_0200, 4).is_err());
+    }
+
+    #[test]
+    fn boot_handoff_contains_public_rsa_and_hmac_material() {
+        let mut bus = build_bus(vec![], FuseLines::from_text(""));
+        let pointer = bus.read(SRAM_BASE + 0xFC, 4).unwrap();
+        assert_eq!(pointer & 7, 0);
+        assert!(pointer + 0x158 < CB_A_LOAD - SRAM_BASE);
+        assert_eq!(BOOT_RSA_HEX.len(), 0x110 * 2);
+        assert_eq!(bus.read(SRAM_BASE + pointer, 8), Ok(0x0000_0020_0001_0001));
+        assert_eq!(bus.read(SRAM_BASE + pointer + 0x10, 8), Ok(0xE98D_B5DC_AF38_8EF1));
+        assert_eq!(bus.read(SRAM_BASE + pointer + 0x148, 8), Ok(0xDD88_AD0C_9ED6_69E7));
+        assert_eq!(bus.read(SRAM_BASE + pointer + 0x150, 8), Ok(0xB567_94FB_6856_3EFA));
+    }
 
     #[test]
     fn presets_are_visible_through_the_bus() {

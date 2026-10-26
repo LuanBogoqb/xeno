@@ -22,15 +22,35 @@ const BIT2_RAW: u64 = 0x0400_0000;
 
 type Msg = [u32; 4];
 
-/// Reply to a command. 0x12 is the version query CB_B sends first; the bytes are a guess (nothing in
-/// the dumps records the console's SMC version), kept in one place so they are easy to change.
+/// Replies captured from a real 17559 console (ConsoleCapture v2, 2026-10-25).
+/// The first byte is the echoed command. Unknown commands still return an
+/// empty reply and are logged.
 fn reply(cmd: u8) -> Msg {
     let mut b = [0u8; 16];
     b[0] = cmd;
-    if cmd == 0x12 {
-        b[1..4].copy_from_slice(&[0x41, 0x02, 0x03]);
-    } else {
-        eprintln!("smc: unknown command {cmd:#x}, empty reply");
+    match cmd {
+        // Captured from the real console via HalSendSMCMessage (2026-10-25).
+        0x01 => b[1..].copy_from_slice(&[
+            0x11, 0x00, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ]),
+        // version 2.0.17559.0
+        0x12 => b[1..].copy_from_slice(&[
+            0x62, 0x02, 0x05, 0x00, 0x00, 0x01, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ]),
+        // temperatures / fan
+        0x07 => b[1..].copy_from_slice(&[
+            0x76, 0x31, 0xB0, 0x2D, 0xC5, 0x2B, 0xD3,
+            0x18, 0x1B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ]),
+        // tray state
+        0x0A => b[1] = 0x62,
+        // AV pack / video mode
+        0x0F => b[1] = 0x1F,
+        // orientation
+        0x17 => {}
+        _ => eprintln!("smc: unknown command {cmd:#x}, empty reply"),
     }
     let w = |i: usize| u32::from_be_bytes(b[4 * i..4 * i + 4].try_into().unwrap());
     [w(0), w(1), w(2), w(3)]
@@ -160,6 +180,25 @@ mod tests {
         let m = recv(&mut d);
         assert_eq!(m[0] >> 24, 0x12);
         assert_eq!(d.read(RX_CTRL, 4).unwrap(), 0);
+    }
+
+    #[test]
+    fn captured_17559_replies_match_the_console() {
+        let mut d = SmcMailbox::new(0xEA00_1000);
+        recv(&mut d);
+        let cases: [(u32, [u8; 16]); 5] = [
+            (0x0100_0000, [0x01, 0x11, 0x00, 0x0A, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+            (0x1200_0000, [0x12, 0x62, 0x02, 0x05, 0x00, 0x00, 0x01, 0x00, 0, 0, 0, 0, 0, 0, 0, 0]),
+            (0x0700_0000, [0x07, 0x76, 0x31, 0xB0, 0x2D, 0xC5, 0x2B, 0xD3, 0x18, 0x1B, 0, 0, 0, 0, 0, 0]),
+            (0x0A00_0000, [0x0A, 0x62, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+            (0x0F00_0000, [0x0F, 0x1F, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+        ];
+        for (word, expected) in cases {
+            send(&mut d, [word, 0, 0, 0]);
+            let m = recv(&mut d);
+            let got: Vec<u8> = m.iter().flat_map(|w| (*w as u32).to_be_bytes()).collect();
+            assert_eq!(got, expected, "command {:#x}", word >> 24);
+        }
     }
 
     #[test]
