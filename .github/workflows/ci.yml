@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust (build + unit tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets
+
+      - name: Build
+        run: cargo build --workspace --all-targets
+
+      - name: Unit tests
+        run: cargo test --workspace --lib
+
+      # The chain tests need a console dump (dumps/) and are #[ignore]d, so CI
+      # only proves they still compile.
+      - name: Compile integration tests
+        run: cargo test --workspace --no-run
+
+  python:
+    name: Python tools (syntax + imports)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip cryptography capstone
+
+      - name: Byte-compile every tool
+        run: python -m compileall -q tools
+
+      - name: Import the shared package
+        run: python -c "import sys; sys.path.insert(0, 'tools'); import xbolib.binary, xbolib.boot, xbolib.crypto, xbolib.lzx, xbolib.xex; print('xbolib ok')"
