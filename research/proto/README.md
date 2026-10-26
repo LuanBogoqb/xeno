@@ -26,7 +26,7 @@ Plugin de HUD/rede da comunidade. Roda como plugin de kernel no RGH.
 ## Limites
 
 - `.rdata` tem blobs ofuscados e quase nenhuma string legível: **endpoints, portas e protocolo não saem de análise estática simples.** Não tentei desofuscar.
-- Para saber com quem ele fala: capturar o tráfego no RGH real com o Proto carregado (marco 3 do roadmap, ver `docs/roadmap.md`).
+- Para saber com quem ele fala: capturar o tráfego no RGH real com o Proto carregado (marco 3 do roadmap, ver `docs/status.md`).
 
 ## Requisitos para o emulador
 

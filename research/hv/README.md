@@ -157,7 +157,7 @@ override de resposta SMC ou salto do handler. Há testes de fronteira 32/64.
 - **M2 não está concluído.** Não houve conexão ao Live.
 
 Captura de vetores para fechar M2:
-- `tools/xosc_capture.c`: homebrew XDK que grava `xosc_capture.bin` ao lado do
+- `tools/capture/xosc_capture.c`: homebrew XDK que grava `xosc_capture.bin` ao lado do
   `.xex` e consulta o SMC via `HalSendSMCMessage`. O caminho XOSC real exige o
   `.xex` baixado do Live, então o capture ainda usa um placeholder.
 - Modo de teste: `runcb ... --stage hv --xosc-test challenge.bin` compara a
@@ -174,7 +174,7 @@ física (0x8000_0000_0000_0000) a partir de um título falhou com
 esses ranges.
 
 **Captura em kernel mode (2026-10-25).** Um plugin do Dashlaunch
-(`tools/seccapture.cpp`) roda em kernel mode e usa o memcpy do freeboot
+(`tools/capture/seccapture.cpp`) roda em kernel mode e usa o memcpy do freeboot
 (`HvxGetVersions`, magic `0x72627472`, op 5) para copiar das regiões reais
 (bits 40..43): 0 = física, 1 = hashed, 2 = SoC, 3 = encrypted. Um detalhe
 crítico: o hypercall **só funciona chamado do `DllMain`**; de uma thread

@@ -141,7 +141,7 @@ offset de bloco 0) simplesmente nao esta mapeado. Com os enderecos certos
 (`0x80000102_00015F00`, `0x80000102_00016360`, ...) o hypercall le a janela
 decriptada do HV a partir do kernel, incluindo os 256 KiB completos.
 
-O v21 (`tools/seccapture.cpp`) e o plugin valido: sem reads impossiveis,
+O v21 (`tools/capture/seccapture.cpp`) e o plugin valido: sem reads impossiveis,
 `return TRUE`, cabecalho gravado antes de cada copia e `FlushFileBuffers` por
 registro, entao um arquivo parcial sempre aponta o endereco exato que falhou.
 
