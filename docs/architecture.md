@@ -14,7 +14,7 @@ executado pelo interpretador. Não há glitch: a verificação de assinatura do 
 | `alu.rs` | helpers de 32/64 bits usados pelo interpretador |
 | `mem/` | barramento, RAM/SRAM/flash, tradução (SDR1), page walker; testes em `mem/tests.rs` |
 | `mmu.rs` | SLB/TLB por PPE, HID6 (`0x3F9`), `DLP`/`LB`, PP0 e NX |
-| `map.rs` | mapa de memória e estado que o 1BL deixa para o CB_A (chaves públicas, SRAM, fusos) |
+| `map.rs` | mapa de memória e estado que o 1BL deixa para o CB_A (chaves públicas, SRAM, fuses) |
 | `runner.rs` | roda um estágio até o handoff, com hooks de PC |
 | `hooks.rs` | ações por PC ("sem glitch") e logging de registradores |
 | `multicore.rs` | escalonador determinístico de 6 threads (modo opt-in) |
@@ -88,7 +88,7 @@ contra um par plaintext/ciphertext real de 4 KiB capturado do console — ver
 
 ## Onde os dados entram
 
-`dumps/` (fora do git) é a fronteira: flash, keyvault, fusos, CPU key, estágios
+`dumps/` (fora do git) é a fronteira: flash, keyvault, fuses, CPU key, estágios
 decifrados (`dumps/stages/`) e capturas (`dumps/console/`). Nada disso é
 necessário para compilar ou rodar os testes de unidade: só os testes de cadeia,
 que são `#[ignore]` e leem esses arquivos como oráculo. Layout completo em

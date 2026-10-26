@@ -2,7 +2,7 @@
 
 Como os dados que o emulador usa saem do console. Duas classes:
 
-1. **Dumps estáticos**: flash/eMMC, keyvault, fusos e CPU key. Saem por XeLL e
+1. **Dumps estáticos**: flash/eMMC, keyvault, fuses e CPU key. Saem por XeLL e
    estão descritos em [`research/flash/README.md`](../research/flash/README.md).
 2. **Capturas de runtime**: RAM do hypervisor, registradores do security engine
    e pares plaintext/ciphertext. Precisam de um plugin em kernel mode — é o que
@@ -44,7 +44,7 @@ Plugin de kernel do Dashlaunch que copia memória para
 `Hdd1:\Plugins\seccap.bin`. Fonte: [`tools/capture/seccapture.cpp`](../tools/capture/seccapture.cpp).
 
 ```powershell
-tools\capture\build_seccapture.bat      # XEDK necessário; gera tools\capture\SecCapture.xex
+tools\capture\build.bat plugin          # XEDK necessário; gera tools\capture\SecCapture.xex
 ```
 
 Deploy e recuperação:

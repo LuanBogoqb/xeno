@@ -37,8 +37,9 @@ cargo run --release -p xenon-cpu --bin runcb -- ... --stage hv --hv-threads 6
 | `--max-steps N` | limite de instruções do estágio corrente |
 | `--hv-max-steps N` | limite depois do handoff para o HV |
 | `--hv-threads 1\|6` | uma CPU (default) ou o modo de seis threads |
-| `--fuses FILE` | usa fusos reais em vez dos embutidos |
-| `--security-engine` | liga o modelo do security engine |
+| `--fuses FILE` | usa fuses reais em vez dos embutidos |
+| `--security-engine off\|generic\|real` | modelo do security engine (default: `real` se as chaves capturadas existirem, senão `generic`) |
+| `--security-keys FILE` | arquivo com a tripla `hash`/`white`/`aes` (default `dumps/console/sec_keys_v25.txt`) |
 | `--xosc-test FILE` | compara a resposta XOSC com um arquivo capturado |
 | `--log-pc PC:r,r` | imprime registradores quando o PC bate |
 | `--cd-stop-pc HEX` / `--hv-stop-pc HEX` | para em um PC interno (snapshots de teste) |
@@ -50,7 +51,7 @@ comparar byte a byte com os arquivos de referência.
 ## Testes
 
 ```powershell
-cargo test -p xenon-cpu                      # 127 testes de unidade, sem dumps
+cargo test -p xenon-cpu                      # testes de unidade, sem dumps
 cargo test -p xenon-cpu --release --test chain -- --ignored   # cadeia real (precisa de dumps)
 
 # as duas provas do security engine (precisam da captura v25)

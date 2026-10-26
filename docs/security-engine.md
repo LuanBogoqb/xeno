@@ -78,5 +78,6 @@ Detalhes da campanha, hipóteses descartadas e o disassembly da rotina `0x84e0`
   que é autoconsistente mas não decifra memória de outro boot.
 - `security.rs` modela a cifra e o caminho protegido (CRC por linha) de forma
   experimental; a validação cobre a transformação XEX + tweak, não o CRC.
-- O `--security-engine` do `runcb` liga o modelo no runner; o default é
-  desligado para não mascarar acessos crus em testes de boot chain.
+- O `runcb` liga o modelo por padrão (`real` quando as chaves capturadas estão
+  disponíveis, senão `generic` all-`0x55`); `--security-engine off` volta para o
+  backing plaintext.

@@ -13,18 +13,13 @@ Emulador de sistema completo (LLE) do Xbox 360: boot real da NAND, hypervisor,
 kernel e dash originais, sem HLE do sistema operacional. Alvo final: uma ISO
 bootável (Linux por baixo) que se comporta como um 360 de verdade.
 
-> Repositório/pacote: `xb-emu` · identidade visual: [`assets/brand/`](assets/brand/).
-> Nada da Microsoft é distribuído aqui: firmware, kernel, dash, keyvault e
-> chaves vêm da NAND do próprio usuário, em `dumps/` (fora do git). Escopo e
-> postura: [docs/decisions.md](docs/decisions.md).
-
 ## Status
 
 | | Marco | Estado |
 |---|---|---|
-| M0 | Dumps do console (flash, KV, fuses, CPU key) | ✅ |
-| M1 | Boot chain até o handoff do CD em `0x100` | ✅ |
-| M2 | HV + kernel virtual, 6 threads, SMC, MMU, security engine | 🚧 |
+| M0 | Dumps do console (flash, KV, fuses, CPU key) | feito |
+| M1 | Boot chain até o handoff do CD em `0x100` | feito |
+| M2 | HV + kernel virtual, 6 threads, SMC, MMU, security engine | em curso |
 | M3 | `xboxkrnl` real + SMC completo | |
 | M4 | Southbridge: SATA/XTAF, USB HID, ethernet | |
 | M5 | GPU Xenos | |
@@ -41,7 +36,7 @@ do CD, HV chegando ao idle guest, e o **security engine validado em hardware**
 cargo build --release
 cargo run --release -p xenon-cpu --bin runcb -- dumps/stages/CB_A.mem dumps/FLASH_1.bin --stage cd --max-steps 400000000
 
-cargo test -p xenon-cpu     # 127 testes de unidade, sem dumps
+cargo test -p xenon-cpu     # testes de unidade, sem dumps
 ```
 
 Requisitos, flags e o layout de `dumps/`:
@@ -61,12 +56,11 @@ Requisitos, flags e o layout de `dumps/`:
 
 ## Documentação
 
-Comece pelo [índice](docs/README.md). Atalhos:
+O índice completo fica em [docs/README.md](docs/README.md). Os pontos de
+entrada mais usados:
 
-- [Arquitetura](docs/architecture.md) — como o emulador é montado, mapa de memória, fluxo de boot.
-- [Status](docs/status.md) — o que está validado, o que falta, próximos passos.
+- [Arquitetura](docs/architecture.md) — módulos, mapa de memória, fluxo de boot.
+- [Status](docs/status.md) — marcos M0–M7, o que está validado e o que falta.
 - [Começando](docs/getting-started.md) — compilar, rodar, testar.
-- [Capturando do console](docs/capturing-from-console.md) — como os dados chegam aqui.
-- [Security engine](docs/security-engine.md) — a cifra, as chaves e a validação em hardware.
-- [Ferramentas](docs/tools.md) — cada script e binário.
-- [Pesquisa](research/README.md) — notas profundas, disassembly e experimentos.
+- [Pesquisa](research/README.md) — notas de engenharia reversa e disassembly.
+- [Padrões do repositório](docs/padroes/README.md) — texto, organização e segurança.

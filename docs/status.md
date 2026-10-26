@@ -5,9 +5,9 @@ registradores/memória são comparados. Um marco só fecha quando isso bate.
 
 | | Marco | Estado | Onde |
 |---|---|---|---|
-| M0 | Dumps do RGH: flash, KV, fusos, CPU key | ✅ | [`research/flash/`](../research/flash/README.md) |
-| M1 | Interpretador PPC executa CB_A → CB_B → CD, CE, CF/CG até o `rfid` final do CD | ✅ | [`research/cb/`](../research/cb/README.md) |
-| M2 | HV + kernel virtual, 6 threads, SMC, MMU, security engine | 🚧 | [`research/hv/`](../research/hv/README.md) |
+| M0 | Dumps do RGH: flash, KV, fuses, CPU key | feito | [`research/flash/`](../research/flash/README.md) |
+| M1 | Interpretador PPC executa CB_A → CB_B → CD, CE, CF/CG até o `rfid` final do CD | feito | [`research/cb/`](../research/cb/README.md) |
+| M2 | HV + kernel virtual, 6 threads, SMC, MMU, security engine | em curso | [`research/hv/`](../research/hv/README.md) |
 | M3 | `xboxkrnl` real + SMC completo | | |
 | M4 | Southbridge: SATA/XTAF, USB HID, ethernet | | |
 | M5 | GPU Xenos (command processor do Xenia como referência) | | |
@@ -22,10 +22,12 @@ autentica e executa CF, aplica CG e os 57 descritores de patch da NAND,
 transporta os argumentos de boot e executa o `rfid` final.
 
 Estado de saída: **PC `0x100`, MSR `0x1000000000000000`, HRMOR
-`0x10000000000`**. Kernel-base e kernel 17559 conferidos byte a byte; fusos
+`0x10000000000`**. Kernel-base e kernel 17559 conferidos byte a byte; fuses
 originais, sem override.
 
 ## M2 — o que já está validado
+
+M2 fecha pelo lado do emulador; o que sobra depende de hardware ou do M7.
 
 - HV executando o kernel virtual, com os handlers de exceção/syscall do guest
   executados de verdade (sem HLE de retorno).
@@ -33,34 +35,27 @@ originais, sem override.
   barreira e chega ao idle guest; o default segue uma CPU.
 - SMC: comandos `0x01/0x12/0x07/0x0A/0x0F/0x17` batem com respostas reais.
 - MMU: page walker SDR1 (PTEG primário/secundário), invalidação seletiva de TLB,
-  encodings de `PP0` e HID6 (`SPR 0x3F9`, `DLP`/`LB`).
-- **Security engine validado em hardware**: a tripla de chaves de DRAM do boot
-  (lida da RAM do HV) decifra um par real de 4 KiB byte a byte. Ver
-  [security-engine.md](security-engine.md).
+  encodings de `PP0`, HID6 (`SPR 0x3F9`, `DLP`/`LB`) e `LPCR[SF]`.
+- Security engine: cifra XEX no caminho de dados das regiões 1/3, ligada por
+  padrão — chaves reais quando `dumps/console/sec_keys_v25.txt` está presente,
+  senão o modelo `generic` all-`0x55`; `--security-engine off` desliga e o
+  caminho usado sai em `HV security path: ...` no log. A tripla de chaves do
+  boot, lida da RAM do HV, decifra um par real de 4 KiB byte a byte. Tags de
+  integridade em AES-CBC-MAC (modelo). Ver [security-engine.md](security-engine.md).
 
 ## M2 — o que falta
 
-- XOSC real e o caminho de Live (dependem de M7; hoje há só um modelo
-  experimental em `xosc.rs`).
-- Modelo de chave por boot no runner (hoje o `--security-engine` é opt-in).
-- `xboxkrnl` de verdade (M3) e os dispositivos de M4; o SMC atual é um mailbox,
-  não o microcontrolador completo.
+- XOSC real: o modelo usa AES-CBC-MAC sobre nonce/flags/CPU key, mas ainda não
+  é uma resposta válida de Live (depende do M7).
+- Chave por boot: o runner usa as chaves capturadas ou o modelo `generic`;
+  gerar a chave do próprio boot segue em aberto.
+- `xboxkrnl` real (M3) e southbridge (M4). O SMC atual é um mailbox validado
+  contra o console, não o microcontrolador completo.
 
-## Próximo passo sugerido
+## Próximo
 
-M2 fechado pelo lado do emulador (2026-10-26): o security engine agora liga por
-padrão - modo `real` quando `dumps/console/sec_keys_v25.txt` (ou `--security-keys`)
-está disponível, senão `generic` (all-`0x55`, distribuição segura); `--security-engine off`
-desliga. O caminho usado é impresso em `HV security path: ...` no log do run.
+M3 está em andamento: o kernel chega ao idle guest (seis threads, barreira
+passada), mas não sai do idle sem eventos de dispositivo que ainda não estão
+modelados. SMC completo, timer/IRQ e M4 ficam para quando o console estiver
+disponível; nesse intervalo o trabalho offline é tooling e captura.
 
-M2 encerrada no escopo atual (2026-10-26): cifra XEX validada e no caminho de
-dados; PP0 estendido, HID6 (DLP) e LPCR[SF] modelados; tags de integridade em
-AES-CBC-MAC (modelo); XOSC refinado (AES-CBC-MAC, ainda não Live válido).
-
-M3 (`xboxkrnl` real): em andamento. O kernel chega ao idle guest (6 threads)
-com a barreira multicore passada, mas não sai do idle sem eventos de dispositivo
-que não estão modelados. SMC permanece mailbox validado (6 comandos capturados).
-SMC completo e M4 (southbridge) ficam para quando o console estiver disponível.
-
-Próximo: retomar M3/M4 com o console (captura de SMC completo, timer/IRQ,
-dispositivos). Enquanto isso, trabalho offline pode focar em tooling/docs.
