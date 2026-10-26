@@ -7,7 +7,7 @@
 
 # XENO
 
-[![CI](https://github.com/LuanBogoqb/xb-emu/actions/workflows/ci.yml/badge.svg)](https://github.com/LuanBogoqb/xb-emu/actions/workflows/ci.yml)
+[![CI](https://github.com/LuanBogoqb/xeno/actions/workflows/ci.yml/badge.svg)](https://github.com/LuanBogoqb/xeno/actions/workflows/ci.yml)
 
 Emulador de sistema completo (LLE) do Xbox 360: boot real da NAND, hypervisor,
 kernel e dash originais, sem HLE do sistema operacional. Alvo final: uma ISO
