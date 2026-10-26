@@ -1,0 +1,178 @@
+84e0: mflr r12
+84e4: bl 0xa808
+84e8: stdu r1, -0x80(r1)
+84ec: mfspr r30, 0x131
+84f0: lbz r11, 0x81(r30)
+84f4: cmplwi cr6, r11, 0
+84f8: beq cr6, 0x8500
+84fc: bl 0x218
+8500: cmplwi cr6, r3, 2
+8504: ble cr6, 0x850c
+8508: bl 0x218
+850c: stb r3, 0x82(r30)
+8510: sync 
+8514: li r11, 1
+8518: stb r11, 0x81(r30)
+851c: sync 
+8520: lis r3, 6
+8524: ori r3, r3, 0x1000
+8528: bl 0x6a0
+852c: mr r29, r3
+8530: lis r3, 5
+8534: bl 0x6a0
+8538: lbz r11, 0x80(r30)
+853c: rldicr r10, r11, 0xc, 0x3f
+8540: cmplwi cr6, r11, 0
+8544: add r28, r10, r3
+8548: bne cr6, 0x86f4
+854c: addis r11, r30, 1
+8550: li r10, 5
+8554: addi r11, r11, -0x5f7f
+8558: b 0x8560
+855c: mr r31, r31
+8560: lbz r9, 0(r11)
+8564: cmplwi cr6, r9, 1
+8568: bne cr6, 0x855c
+856c: addi r10, r10, -1
+8570: addi r11, r11, -0x2000
+8574: cmplwi cr6, r10, 0
+8578: bne cr6, 0x8560
+857c: ld r11, 0x1a0(r29)
+8580: li r12, -0x101
+8584: and r11, r11, r12
+8588: std r11, 0x1a0(r29)
+858c: eieio 
+8590: ld r11, 0x1a0(r29)
+8594: cmpldi cr6, r11, 0
+8598: beq cr6, 0x85a0
+859c: nop 
+85a0: isync 
+85a4: addis r11, r2, 1
+85a8: ld r10, 0x6000(r3)
+85ac: li r31, 0
+85b0: addi r11, r11, 0x6360
+85b4: std r10, 0(r11)
+85b8: ld r10, 0x6010(r3)
+85bc: std r10, 8(r11)
+85c0: ld r10, 0x6020(r3)
+85c4: std r10, 0x10(r11)
+85c8: ld r10, 0x6030(r3)
+85cc: std r10, 0x18(r11)
+85d0: ld r10, 0x6040(r3)
+85d4: std r10, 0x20(r11)
+85d8: std r31, 0x6000(r3)
+85dc: eieio 
+85e0: std r31, 0x6010(r3)
+85e4: eieio 
+85e8: std r31, 0x6020(r3)
+85ec: eieio 
+85f0: std r31, 0x6030(r3)
+85f4: eieio 
+85f8: std r31, 0x6040(r3)
+85fc: eieio 
+8600: ld r10, 0x6040(r3)
+8604: cmpldi cr6, r10, 0
+8608: beq cr6, 0x8610
+860c: nop 
+8610: isync 
+8614: ld r10, 0x1c8(r29)
+8618: std r10, 0x28(r11)
+861c: std r31, 0x1c8(r29)
+8620: eieio 
+8624: ld r11, 0x1c8(r29)
+8628: cmpldi cr6, r11, 0
+862c: beq cr6, 0x8634
+8630: nop 
+8634: isync 
+8638: li r10, 5
+863c: li r11, 0
+8640: rldimi r11, r10, 0xd, 0x13
+8644: add r11, r11, r30
+8648: lbz r9, 0x82(r11)
+864c: lbz r8, 0x82(r30)
+8650: cmplw cr6, r9, r8
+8654: bne cr6, 0x86ec
+8658: li r9, 2
+865c: stb r9, 0x81(r11)
+8660: sync 
+8664: b 0x866c
+8668: mr r31, r31
+866c: lbz r9, 0x81(r11)
+8670: cmplwi cr6, r9, 3
+8674: bne cr6, 0x8668
+8678: addi r10, r10, -1
+867c: cmplwi cr6, r10, 0
+8680: bne cr6, 0x863c
+8684: bl 0x4cc
+8688: li r11, 0x200
+868c: mr r10, r31
+8690: lbz r9, 0(r3)
+8694: addi r11, r11, -1
+8698: addi r3, r3, 0x80
+869c: add r10, r9, r10
+86a0: cmplwi cr6, r11, 0
+86a4: bne cr6, 0x8690
+86a8: cmpldi cr6, r10, 0
+86ac: beq cr6, 0x86b4
+86b0: nop 
+86b4: isync 
+86b8: li r11, 0x180
+86bc: mr r10, r30
+86c0: lbz r9, 0(r10)
+86c4: addi r11, r11, -1
+86c8: addi r10, r10, 0x80
+86cc: add r31, r9, r31
+86d0: cmplwi cr6, r11, 0
+86d4: bne cr6, 0x86c0
+86d8: cmpldi cr6, r31, 0
+86dc: beq cr6, 0x86e4
+86e0: nop 
+86e4: isync 
+86e8: b 0x8700
+86ec: bl 0x218
+86f0: mr r31, r31
+86f4: lbz r11, 0x81(r30)
+86f8: cmplwi cr6, r11, 2
+86fc: bne cr6, 0x86f0
+8700: li r11, 0x7c
+8704: std r11, 8(r28)
+8708: eieio 
+870c: ld r11, 8(r28)
+8710: cmpldi cr6, r11, 0
+8714: beq cr6, 0x871c
+8718: nop 
+871c: isync 
+8720: mfspr r10, 0x16
+8724: lis r11, 0x7fff
+8728: stw r10, 0x88(r30)
+872c: ori r11, r11, 0xffff
+8730: mtspr 0x16, r11
+8734: lbz r9, 0x80(r30)
+8738: clrlwi r10, r9, 0x1f
+873c: cmplwi cr6, r10, 0
+8740: bne cr6, 0x8768
+8744: b 0x874c
+8748: mr r31, r31
+874c: mfspr r10, 0x88
+8750: rlwinm r10, r10, 0, 9, 9
+8754: cmpldi cr6, r10, 0
+8758: bne cr6, 0x8748
+875c: mfspr r10, 0x136
+8760: stw r10, 0x8c(r30)
+8764: mtspr 0x136, r11
+8768: mfspr r11, 0x399
+876c: sync 
+8770: lis r12, -0x71
+8774: nor r10, r9, r9
+8778: ori r12, r12, 0xffff
+877c: rlwinm r10, r10, 0x14, 0xb, 0xb
+8780: and r11, r11, r12
+8784: or r11, r10, r11
+8788: mtspr 0x399, r11
+878c: sync 
+8790: isync 
+8794: li r11, 3
+8798: stb r11, 0x81(r30)
+879c: sync 
+87a0: addi r1, r1, 0x80
+87a4: b 0xa858
