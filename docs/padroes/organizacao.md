@@ -109,6 +109,29 @@ Regras por tipo:
 - Antes de criar, procure: `git ls-files` e `Select-String` custam menos que um
   arquivo duplicado.
 
+## Branches e integração
+
+- `main` é linear: nenhum merge commit no histórico.
+- Trabalho acontece em branch. O nome diz o marco: `m1b-cb-b`, `m2-hv`.
+- Integrar é rebase, não merge:
+
+  ```powershell
+  git checkout m1b-cb-b
+  git rebase main
+  git checkout main
+  git merge --ff-only m1b-cb-b
+  git push origin main m1b-cb-b
+  ```
+
+- Conflito se resolve na branch, durante o rebase. O commit que resolve conflito
+  não é o que fecha o assunto: ele descreve o que foi reconciliado.
+- Branch já integrada não serve para o próximo marco. Cria-se outra a partir de
+  `main`.
+- Force-push só na branch, com `--force-with-lease`. `main` publicada não se
+  reescreve: histórico errado em `main` se corrige com commit novo.
+- A mensagem de commit não é da integração. Como não há merge commit, o histórico
+  de `main` é a sequência dos commits de trabalho.
+
 ## Tamanho
 
 - Arquivo de código acima de ~800 linhas, ou ~1.000 se for arquivo de teste:
