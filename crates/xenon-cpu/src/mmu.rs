@@ -1,7 +1,9 @@
-//! Experimental software-managed Xenon SLB/TLB. No hashed-page-table walker
-//! or complete protection yet (base PP/key and NX checks only). Kept opt-in to isolate the validated CD
-//! cache-window model. Register layout reference: IBM CBE handbook and
-//! xenon-emu's PPC_MMU.cpp / PPC_System.cpp (numeric field definitions only).
+//! Software-managed Xenon SLB/TLB on top of the SDR1 page walker in `mem/`.
+//! Translation, the hashed page table and PP/NX checks live there; this module
+//! holds the per-PPE TLB, HID6 page-size controls and protection state. Kept
+//! opt-in to isolate the validated CD cache-window model. Register layout
+//! reference: IBM CBE handbook and xenon-emu's PPC_MMU.cpp / PPC_System.cpp
+//! (numeric field definitions only).
 use crate::mem::BusError;
 
 /// HID6 (SPR 0x3F9 on the Cell/Xenon PPE; SPR 0x3F6 is HID5). Field
