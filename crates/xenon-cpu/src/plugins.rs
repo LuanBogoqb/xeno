@@ -139,21 +139,40 @@ pub fn report(list: &PluginList) -> Vec<String> {
         )),
     }
     for s in &list.specs {
-        let info = std::fs::read(&s.path).ok().and_then(|b| read_xex(&b).ok());
-        match info {
-            Some(x) => {
-                let base = x.image_base.or(x.load_address).unwrap_or(0);
-                out.push(format!(
-                    "  plugin{}  {}  XEX2 encryption={} compression={} entry={:#x} base={base:#x} imports=[{}]",
+        let parsed = std::fs::read(&s.path)
+            .map_err(|_| ())
+            .and_then(|b| crate::xex::Xex::parse(b).map_err(|_| ()));
+        match parsed {
+            Ok(x) => {
+                let base = x.image_base().or(x.load_address().map(|a| a as u64)).unwrap_or(0);
+                let libraries: Vec<String> = x
+                    .import_libraries()
+                    .iter()
+                    .map(|lib| format!("{lib}={}", x.imports().iter().filter(|i| &i.library == lib).count()))
+                    .collect();
+                let mut line = format!(
+                    "  plugin{}  {}  XEX2 encryption={} compression={} entry={:#x} base={base:#x} image={} imports=[{}]",
                     s.slot,
                     s.path.display(),
-                    x.encryption,
+                    x.encryption(),
                     x.compression_name(),
-                    x.entry_point.unwrap_or(0),
-                    x.import_libraries.join(" ")
-                ));
+                    x.entry_point().unwrap_or(0),
+                    x.image_size(),
+                    libraries.join(" ")
+                );
+                match x.extract().and_then(|image| x.map(&image)) {
+                    Ok(image) => {
+                        let (slots, thunks) = x.classify_imports(&image);
+                        line.push_str(&format!(
+                            " ({} slots, {} thunks)",
+                            slots, thunks
+                        ));
+                    }
+                    Err(e) => line.push_str(&format!("  extraction failed: {e}")),
+                }
+                out.push(line);
             }
-            None => out.push(format!(
+            Err(_) => out.push(format!(
                 "  plugin{}  {}  (file not found or not XEX2)",
                 s.slot,
                 s.path.display()
@@ -162,7 +181,7 @@ pub fn report(list: &PluginList) -> Vec<String> {
     }
     if !list.is_empty() {
         out.push(
-            "Plugin loader: M6; the list and the headers are read, the images are not mapped or executed"
+            "Plugin loader: the image is extracted and its imports are classified; mapping into guest RAM and the entry call need the kernel (M6)"
                 .to_string(),
         );
     }
@@ -172,7 +191,8 @@ pub fn report(list: &PluginList) -> Vec<String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct XexInfo {
     pub size: usize,
-    pub header_size: u32,
+    /// Base file (PE data) offset in the XEX.
+    pub pe_offset: u32,
     /// 0 = unencrypted, 1 = retail key, 2 = devkit key.
     pub encryption: u16,
     /// 0 = stored, 1 = basic, 2 = LZX.
@@ -204,106 +224,22 @@ pub enum XexError {
 
 /// Reads the XEX2 header and the optional headers the loader needs.
 pub fn read_xex(bytes: &[u8]) -> Result<XexInfo, XexError> {
-    if bytes.len() < 24 {
-        return Err(XexError::TooShort);
-    }
-    if &bytes[..4] != b"XEX2" {
-        return Err(XexError::BadMagic);
-    }
-    let be32 = |o: usize| -> Result<u32, XexError> {
-        bytes
-            .get(o..o + 4)
-            .map(|b| u32::from_be_bytes(b.try_into().unwrap()))
-            .ok_or(XexError::BadOffset)
-    };
-    let header_size = be32(8)?;
-    let security_offset = be32(16)? as usize;
-    let count = be32(20)? as usize;
-
-    let mut encryption = 0;
-    let mut compression = 0;
-    let mut entry_point = None;
-    let mut image_base = None;
-    let mut import_libraries = Vec::new();
-
-    for i in 0..count {
-        let base = 24 + 8 * i;
-        let key = be32(base)?;
-        let value = be32(base + 4)?;
-        let low = (key & 0xFF) as usize;
-        // 0 and 1 carry the value inline; the rest point to data whose length
-        // comes from the key (`low * 4`) or from a leading u32 (`0xFF`).
-        let blob: Vec<u8> = match low {
-            0 | 1 => value.to_be_bytes().to_vec(),
-            0xFF => {
-                let len = be32(value as usize)? as usize;
-                bytes
-                    .get(value as usize..value as usize + len)
-                    .ok_or(XexError::BadOffset)?
-                    .to_vec()
-            }
-            n => bytes
-                .get(value as usize..value as usize + n * 4)
-                .ok_or(XexError::BadOffset)?
-                .to_vec(),
-        };
-        match key {
-            0x3FF => {
-                // base_file_format: u32 version, u16 encryption, u16 compression.
-                if blob.len() >= 8 {
-                    encryption = u16::from_be_bytes([blob[4], blob[5]]);
-                    compression = u16::from_be_bytes([blob[6], blob[7]]);
-                }
-            }
-            0x10100 => entry_point = Some(value),
-            0x10201 => image_base = Some(value),
-            0x103FF => import_libraries = read_import_names(&blob),
-            _ => {}
-        }
-    }
-
-    let load_address = if security_offset + 276 <= bytes.len() {
-        Some(u32::from_be_bytes(
-            bytes[security_offset + 272..security_offset + 276].try_into().unwrap(),
-        ))
-    } else {
-        None
-    };
-
+    let x = crate::xex::Xex::parse(bytes.to_vec()).map_err(|e| match e {
+        crate::xex::XexError::TooShort => XexError::TooShort,
+        crate::xex::XexError::BadMagic => XexError::BadMagic,
+        _ => XexError::BadOffset,
+    })?;
     Ok(XexInfo {
-        size: bytes.len(),
-        header_size,
-        encryption,
-        compression,
-        entry_point,
-        image_base,
-        load_address,
-        import_libraries,
+        size: x.file_size(),
+        pe_offset: x.pe_offset() as u32,
+        encryption: x.encryption(),
+        compression: x.compression(),
+        entry_point: x.entry_point().map(|e| e as u32),
+        image_base: x.image_base().map(|b| b as u32),
+        load_address: x.load_address(),
+        import_libraries: x.import_libraries().to_vec(),
     })
 }
-
-/// Import libraries blob: u32 size, u32 names size, u32 count, then the names.
-fn read_import_names(blob: &[u8]) -> Vec<String> {
-    if blob.len() < 12 {
-        return Vec::new();
-    }
-    let names_size = u32::from_be_bytes(blob[4..8].try_into().unwrap()) as usize;
-    let count = u32::from_be_bytes(blob[8..12].try_into().unwrap()) as usize;
-    let end = (12 + names_size).min(blob.len());
-    let mut out = Vec::new();
-    let mut o = 12;
-    while o < end && out.len() < count {
-        let Some(len) = blob[o..end].iter().position(|b| *b == 0) else {
-            break;
-        };
-        if len > 0 {
-            out.push(String::from_utf8_lossy(&blob[o..o + len]).to_string());
-        }
-        o += len + 1;
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,7 +371,7 @@ mod tests {
         blob.extend_from_slice(&2u32.to_be_bytes());
         blob.extend_from_slice(b"xboxkrnl.exe\0xam.xex\0\0\0");
         blob.resize(12 + 26, 0);
-        assert_eq!(read_import_names(&blob), vec!["xboxkrnl.exe", "xam.xex"]);
+        assert_eq!(crate::xex::read_imports(&blob).unwrap().0, vec!["xboxkrnl.exe", "xam.xex"]);
     }
 
     #[test]
@@ -452,7 +388,7 @@ mod tests {
         assert!(lines[1].contains("plugin1"));
         assert!(lines[1].contains("encryption=1 compression=LZX"));
         assert!(lines[1].contains("entry=0x91883800"));
-        assert!(lines[2].starts_with("Plugin loader: M6"));
+        assert!(lines[2].starts_with("Plugin loader: the image is extracted"));
         std::fs::remove_dir_all(&dir).ok();
     }
 

@@ -8,5 +8,6 @@ mod mmu;
 pub mod multicore;
 pub mod plugins;
 pub mod security;
+pub mod xex;
 pub mod xosc;
 pub mod runner;
